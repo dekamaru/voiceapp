@@ -1,10 +1,11 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, error, info};
-use voiceapp_common::{TcpPacket, PacketTypeId, encode_username, decode_username, encode_participant_list_with_voice, ParticipantInfo};
+use voiceapp_common::{TcpPacket, PacketTypeId, encode_username, decode_username, encode_participant_list_with_voice, ParticipantInfo, VoicePacket, decode_username_with_udp_port};
+use std::collections::HashMap;
 
 const MAX_BUFFER_SIZE: usize = 65536; // Prevent memory exhaustion attacks
 
@@ -14,7 +15,7 @@ type BroadcastSender = broadcast::Sender<BroadcastEvent>;
 enum BroadcastEvent {
     UserJoined { username: String },
     UserLeft { username: String },
-    UserJoinedVoice { username: String },
+    UserJoinedVoice { username: String, udp_addr: SocketAddr },
     UserLeftVoice { username: String },
 }
 
@@ -22,6 +23,8 @@ pub struct Server {
     broadcast_tx: BroadcastSender,
     participants: Arc<RwLock<Vec<String>>>,
     voice_channel_members: Arc<RwLock<Vec<String>>>, // Users currently in voice channel
+    voice_addresses: Arc<RwLock<HashMap<String, SocketAddr>>>, // username -> UDP address for voice
+    voice_listen_port: u16, // UDP port for voice relay
 }
 
 impl Server {
@@ -31,13 +34,36 @@ impl Server {
             broadcast_tx: tx,
             participants: Arc::new(RwLock::new(Vec::new())),
             voice_channel_members: Arc::new(RwLock::new(Vec::new())),
+            voice_addresses: Arc::new(RwLock::new(HashMap::new())),
+            voice_listen_port: 9002, // Default port for voice relay
         }
+    }
+
+    pub fn with_voice_port(mut self, port: u16) -> Self {
+        self.voice_listen_port = port;
+        self
     }
 
     pub async fn run(&self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
         let listener = TcpListener::bind(addr).await?;
         let local_addr = listener.local_addr()?;
         info!("Server listening on {}", local_addr);
+
+        // Start UDP voice relay listener on configured port
+        let udp_addr = format!("127.0.0.1:{}", self.voice_listen_port);
+        let udp_socket = create_voice_socket(&udp_addr).await?;
+        info!("Voice relay listening on {}", udp_socket.local_addr()?);
+        let udp_socket = Arc::new(udp_socket);
+        let voice_addresses = self.voice_addresses.clone();
+        let voice_channel_members = self.voice_channel_members.clone();
+        tokio::spawn({
+            let udp_socket = udp_socket.clone();
+            let voice_addresses = voice_addresses.clone();
+            let voice_channel_members = voice_channel_members.clone();
+            async move {
+                handle_udp_relay(udp_socket, voice_addresses, voice_channel_members).await
+            }
+        });
 
         loop {
             let (socket, peer_addr) = listener.accept().await?;
@@ -46,8 +72,9 @@ impl Server {
             let broadcast_tx = self.broadcast_tx.clone();
             let participants = self.participants.clone();
             let voice_channel_members = self.voice_channel_members.clone();
+            let voice_addresses = self.voice_addresses.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_client(socket, broadcast_tx, participants, voice_channel_members, peer_addr).await {
+                if let Err(e) = handle_client(socket, broadcast_tx, participants, voice_channel_members, voice_addresses, peer_addr).await {
                     error!("[{}] Error: {}", peer_addr, e);
                 }
             });
@@ -59,10 +86,27 @@ impl Server {
         let local_addr = listener.local_addr()?;
         info!("Server listening on {}", local_addr);
 
+        // Start UDP voice relay listener on configured port
+        let udp_addr = format!("127.0.0.1:{}", self.voice_listen_port);
+        let udp_socket = create_voice_socket(&udp_addr).await?;
+        info!("Voice relay listening on {}", udp_socket.local_addr()?);
+        let udp_socket = Arc::new(udp_socket);
+        let voice_addresses = self.voice_addresses.clone();
+        let voice_channel_members = self.voice_channel_members.clone();
+        tokio::spawn({
+            let udp_socket = udp_socket.clone();
+            let voice_addresses = voice_addresses.clone();
+            let voice_channel_members = voice_channel_members.clone();
+            async move {
+                handle_udp_relay(udp_socket, voice_addresses, voice_channel_members).await
+            }
+        });
+
         // Start accepting in background
         let broadcast_tx = self.broadcast_tx.clone();
         let participants = self.participants.clone();
         let voice_channel_members = self.voice_channel_members.clone();
+        let voice_addresses = self.voice_addresses.clone();
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
@@ -71,8 +115,9 @@ impl Server {
                         let broadcast_tx = broadcast_tx.clone();
                         let participants = participants.clone();
                         let voice_channel_members = voice_channel_members.clone();
+                        let voice_addresses = voice_addresses.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_client(socket, broadcast_tx, participants, voice_channel_members, peer_addr).await {
+                            if let Err(e) = handle_client(socket, broadcast_tx, participants, voice_channel_members, voice_addresses, peer_addr).await {
                                 error!("[{}] Error: {}", peer_addr, e);
                             }
                         });
@@ -106,6 +151,12 @@ fn validate_username(username: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Create a UDP socket for voice relay
+async fn create_voice_socket(addr: &str) -> Result<UdpSocket, Box<dyn std::error::Error>> {
+    let udp_socket = UdpSocket::bind(addr).await?;
+    Ok(udp_socket)
+}
+
 /// Remove user from participants list and broadcast UserLeft event
 async fn remove_participant(
     participants: &Arc<RwLock<Vec<String>>>,
@@ -120,11 +171,59 @@ async fn remove_participant(
     });
 }
 
+/// Handle UDP voice packet relay
+/// Listens for incoming voice packets and forwards them to all users in the voice channel
+async fn handle_udp_relay(
+    udp_socket: Arc<UdpSocket>,
+    voice_addresses: Arc<RwLock<HashMap<String, SocketAddr>>>,
+    voice_channel_members: Arc<RwLock<Vec<String>>>,
+) {
+    let mut buf = vec![0u8; 4096];
+
+    loop {
+        match udp_socket.recv_from(&mut buf).await {
+            Ok((n, src_addr)) => {
+                // Try to decode voice packet
+                match VoicePacket::decode(&buf[..n]) {
+                    Ok((packet, _)) => {
+                        debug!("Received voice packet from {}: seq={}, ts={}, size={}", src_addr, packet.sequence, packet.timestamp, n);
+
+                        // Get all voice channel members' addresses
+                        let addresses = voice_addresses.read().await;
+                        let members = voice_channel_members.read().await;
+
+                        // Forward to all users in voice channel except sender
+                        for username in members.iter() {
+                            if let Some(&dest_addr) = addresses.get(username) {
+                                if dest_addr != src_addr {
+                                    // Send packet to this user
+                                    if let Err(e) = udp_socket.send_to(&buf[..n], dest_addr).await {
+                                        error!("Failed to forward voice packet to {}: {}", dest_addr, e);
+                                    } else {
+                                        debug!("Forwarded packet to {}", dest_addr);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Failed to decode voice packet from {}: {}", src_addr, e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("UDP receive error: {}", e);
+            }
+        }
+    }
+}
+
 async fn handle_client(
     mut socket: TcpStream,
     broadcast_tx: BroadcastSender,
     participants: Arc<RwLock<Vec<String>>>,
     voice_channel_members: Arc<RwLock<Vec<String>>>,
+    voice_addresses: Arc<RwLock<HashMap<String, SocketAddr>>>,
     peer_addr: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut buffer = Vec::new();
@@ -175,9 +274,12 @@ async fn handle_client(
         let voice_lock = voice_channel_members.read().await;
         let participant_infos: Vec<ParticipantInfo> = participants_lock
             .iter()
-            .map(|u| ParticipantInfo {
-                username: u.clone(),
-                in_voice: voice_lock.contains(u),
+            .map(|u| {
+                let in_voice = voice_lock.contains(u);
+                ParticipantInfo {
+                    username: u.clone(),
+                    in_voice,
+                }
             })
             .collect();
         let payload = encode_participant_list_with_voice(&participant_infos)?;
@@ -216,21 +318,50 @@ async fn handle_client(
                         while let Ok((packet, bytes_read)) = TcpPacket::decode(&buffer) {
                             match packet.packet_type {
                                 PacketTypeId::JoinVoiceChannel => {
-                                    debug!("[{}] {} joining voice channel", peer_addr, username);
-                                    let mut members = voice_channel_members.write().await;
-                                    if !members.contains(&username) {
-                                        members.push(username.clone());
+                                    // Extract username and UDP port from payload
+                                    match decode_username_with_udp_port(&packet.payload) {
+                                        Ok((_, udp_port)) => {
+                                            // Create UDP address for this user
+                                            let udp_addr = format!("127.0.0.1:{}", udp_port).parse::<SocketAddr>()?;
+
+                                            debug!("[{}] {} joining voice channel at {}", peer_addr, username, udp_addr);
+
+                                            // Store the UDP address for this user
+                                            let mut addrs = voice_addresses.write().await;
+                                            addrs.insert(username.clone(), udp_addr);
+                                            drop(addrs);
+
+                                            // Add to voice channel members
+                                            let mut members = voice_channel_members.write().await;
+                                            if !members.contains(&username) {
+                                                members.push(username.clone());
+                                            }
+                                            drop(members);
+
+                                            // Broadcast voice join with address
+                                            let _ = broadcast_tx.send(BroadcastEvent::UserJoinedVoice {
+                                                username: username.clone(),
+                                                udp_addr,
+                                            });
+                                        }
+                                        Err(e) => {
+                                            error!("[{}] Failed to decode join voice packet: {}", peer_addr, e);
+                                        }
                                     }
-                                    drop(members);
-                                    let _ = broadcast_tx.send(BroadcastEvent::UserJoinedVoice {
-                                        username: username.clone()
-                                    });
                                 }
                                 PacketTypeId::UserLeftVoice => {
                                     debug!("[{}] {} leaving voice channel", peer_addr, username);
+
+                                    // Remove UDP address
+                                    let mut addrs = voice_addresses.write().await;
+                                    addrs.remove(&username);
+                                    drop(addrs);
+
+                                    // Remove from voice channel members
                                     let mut members = voice_channel_members.write().await;
                                     members.retain(|u| u != &username);
                                     drop(members);
+
                                     let _ = broadcast_tx.send(BroadcastEvent::UserLeftVoice {
                                         username: username.clone()
                                     });
@@ -273,8 +404,8 @@ async fn handle_client(
                             debug!("[{}] Broadcasted {} left", peer_addr, other_user);
                         }
                     }
-                    Ok(BroadcastEvent::UserJoinedVoice { username: other_user }) => {
-                        // Broadcast to all participants so they can update UI
+                    Ok(BroadcastEvent::UserJoinedVoice { username: other_user, udp_addr: _ }) => {
+                        // Broadcast to all participants so they can update UI and create output streams
                         if other_user != username {
                             let pkt = TcpPacket::new(
                                 PacketTypeId::UserJoinedVoice,

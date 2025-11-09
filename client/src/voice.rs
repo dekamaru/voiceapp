@@ -2,7 +2,7 @@ use opus::{Channels, Encoder};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::debug;
-use voiceapp_common::VoicePacket;
+use voiceapp_common::{VoicePacket, username_to_ssrc};
 
 const SAMPLE_RATE: u32 = 48000;
 const OPUS_FRAME_SAMPLES: usize = 960; // 20ms at 48kHz
@@ -10,27 +10,28 @@ const OPUS_FRAME_SAMPLES: usize = 960; // 20ms at 48kHz
 /// Manages Opus encoding of audio frames
 pub struct VoiceEncoder {
     encoder: Encoder,
+    pub ssrc: u32, // Deterministically computed from username
     pub sequence: u32,
     pub timestamp: u32,
-    pub ssrc: u32,
     sample_buffer: Vec<f32>,
 }
 
 impl VoiceEncoder {
-    /// Create a new voice encoder with random SSRC
-    pub fn new() -> Result<Self, opus::Error> {
+    /// Create a new voice encoder for the given username
+    pub fn new(username: String) -> Result<Self, opus::Error> {
         let mut encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, opus::Application::Voip)?;
 
         // Set encoding parameters
         encoder.set_bitrate(opus::Bitrate::Max)?;
 
-        let ssrc = rand::random::<u32>();
+        // Compute SSRC from username
+        let ssrc = username_to_ssrc(&username);
 
         Ok(VoiceEncoder {
             encoder,
+            ssrc,
             sequence: 0,
             timestamp: 0,
-            ssrc,
             sample_buffer: Vec::with_capacity(OPUS_FRAME_SAMPLES * 2),
         })
     }
@@ -94,9 +95,9 @@ pub struct VoiceEncoderHandle {
 }
 
 impl VoiceEncoderHandle {
-    /// Create a new encoder handle
-    pub fn new() -> Result<Self, opus::Error> {
-        let encoder = VoiceEncoder::new()?;
+    /// Create a new encoder handle for the given username
+    pub fn new(username: String) -> Result<Self, opus::Error> {
+        let encoder = VoiceEncoder::new(username)?;
         Ok(VoiceEncoderHandle {
             encoder: Arc::new(Mutex::new(encoder)),
         })
@@ -121,13 +122,13 @@ mod tests {
 
     #[test]
     fn test_voice_encoder_creation() {
-        let result = VoiceEncoder::new();
+        let result = VoiceEncoder::new("test_user".to_string());
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_encode_single_frame() {
-        let mut encoder = VoiceEncoder::new().expect("Failed to create encoder");
+        let mut encoder = VoiceEncoder::new("test_user".to_string()).expect("Failed to create encoder");
 
         // Create a test frame of 960 samples with low entropy (zeros compress well)
         let samples: Vec<f32> = vec![0.0; 960];
@@ -143,7 +144,7 @@ mod tests {
 
     #[test]
     fn test_encode_multiple_frames() {
-        let mut encoder = VoiceEncoder::new().expect("Failed to create encoder");
+        let mut encoder = VoiceEncoder::new("test_user".to_string()).expect("Failed to create encoder");
 
         // Create 2.5 frames worth of samples (2400 samples)
         let samples: Vec<f32> = (0..2400).map(|i| (i as f32 / 1000.0).sin()).collect();
@@ -160,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_encode_small_samples() {
-        let mut encoder = VoiceEncoder::new().expect("Failed to create encoder");
+        let mut encoder = VoiceEncoder::new("test_user".to_string()).expect("Failed to create encoder");
 
         // Add 480 samples (half frame)
         let samples: Vec<f32> = (0..480).map(|i| (i as f32 / 1000.0).sin()).collect();
@@ -182,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_flush_incomplete_frame() {
-        let mut encoder = VoiceEncoder::new().expect("Failed to create encoder");
+        let mut encoder = VoiceEncoder::new("test_user".to_string()).expect("Failed to create encoder");
 
         // Add incomplete frame
         let samples: Vec<f32> = (0..500).map(|i| (i as f32 / 1000.0).sin()).collect();
@@ -198,7 +199,7 @@ mod tests {
 
     #[test]
     fn test_flush_empty_buffer() {
-        let mut encoder = VoiceEncoder::new().expect("Failed to create encoder");
+        let mut encoder = VoiceEncoder::new("test_user".to_string()).expect("Failed to create encoder");
 
         let flushed = encoder.flush().expect("Flush failed");
 
@@ -208,7 +209,7 @@ mod tests {
 
     #[test]
     fn test_sequence_wrapping() {
-        let mut encoder = VoiceEncoder::new().expect("Failed to create encoder");
+        let mut encoder = VoiceEncoder::new("test_user".to_string()).expect("Failed to create encoder");
         encoder.sequence = u32::MAX; // Start at max
 
         // Create 2 frames worth of samples
@@ -223,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_progression() {
-        let mut encoder = VoiceEncoder::new().expect("Failed to create encoder");
+        let mut encoder = VoiceEncoder::new("test_user".to_string()).expect("Failed to create encoder");
 
         let samples: Vec<f32> = (0..2880).map(|i| (i as f32 / 1000.0).sin()).collect();
 
@@ -236,12 +237,15 @@ mod tests {
     }
 
     #[test]
-    fn test_ssrc_unique() {
-        let encoder1 = VoiceEncoder::new().expect("Failed to create encoder 1");
-        let encoder2 = VoiceEncoder::new().expect("Failed to create encoder 2");
+    fn test_ssrc_from_username() {
+        use voiceapp_common::username_to_ssrc;
 
-        // SSRCs should be different (with high probability)
-        // We can't guarantee they're different due to randomness, but it's extremely unlikely
+        let encoder1 = VoiceEncoder::new("alice".to_string()).expect("Failed to create encoder 1");
+        let encoder2 = VoiceEncoder::new("bob".to_string()).expect("Failed to create encoder 2");
+
+        // SSRCs should be computed from usernames
         assert_ne!(encoder1.ssrc, encoder2.ssrc);
+        assert_eq!(encoder1.ssrc, username_to_ssrc("alice"));
+        assert_eq!(encoder2.ssrc, username_to_ssrc("bob"));
     }
 }

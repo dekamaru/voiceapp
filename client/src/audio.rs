@@ -4,7 +4,6 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 const TARGET_SAMPLE_RATE: u32 = 48000;
-const TARGET_CHANNELS: u16 = 1; // mono
 const AUDIO_BUFFER_CAPACITY: usize = 4800; // ~100ms at 48kHz
 
 /// Audio frame: mono F32 samples at 48kHz
@@ -23,13 +22,13 @@ impl AudioInputHandle {
     }
 
     /// Get mutable receiver to consume audio frames
-    pub fn receiver_mut(&mut self) -> &mut mpsc::Receiver<AudioFrame> {
-        self.receiver.as_mut().expect("receiver already taken")
+    pub fn receiver_mut(&mut self) -> Result<&mut mpsc::Receiver<AudioFrame>, String> {
+        self.receiver.as_mut().ok_or_else(|| "receiver was already taken".to_string())
     }
 
     /// Extract the receiver from this handle (consuming it)
-    pub fn take_receiver(&mut self) -> mpsc::Receiver<AudioFrame> {
-        self.receiver.take().expect("receiver already taken")
+    pub fn take_receiver(&mut self) -> Result<mpsc::Receiver<AudioFrame>, String> {
+        self.receiver.take().ok_or_else(|| "receiver was already taken".to_string())
     }
 }
 

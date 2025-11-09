@@ -42,6 +42,7 @@ impl UdpVoiceSender {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use voiceapp_common::username_to_ssrc;
 
     #[tokio::test]
     async fn test_udp_sender_creation() {
@@ -58,7 +59,8 @@ mod tests {
             .expect("Failed to create sender");
 
         // Create a dummy voice packet
-        let packet = VoicePacket::new(0, 0, 12345, vec![0x12, 0x34, 0x56, 0x78]);
+        let ssrc = username_to_ssrc("alice");
+        let packet = VoicePacket::new(0, 0, ssrc, vec![0x12, 0x34, 0x56, 0x78]);
 
         // Send should complete without error (even if no receiver is listening)
         let result = sender.send_packet(&packet).await;
@@ -71,10 +73,11 @@ mod tests {
             .await
             .expect("Failed to create sender");
 
+        let ssrc = username_to_ssrc("alice");
         let packets = vec![
-            VoicePacket::new(0, 0, 12345, vec![0x11, 0x22]),
-            VoicePacket::new(1, 960, 12345, vec![0x33, 0x44]),
-            VoicePacket::new(2, 1920, 12345, vec![0x55, 0x66]),
+            VoicePacket::new(0, 0, ssrc, vec![0x11, 0x22]),
+            VoicePacket::new(1, 960, ssrc, vec![0x33, 0x44]),
+            VoicePacket::new(2, 1920, ssrc, vec![0x55, 0x66]),
         ];
 
         let result = sender.send_packets(&packets).await;

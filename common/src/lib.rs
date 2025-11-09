@@ -8,6 +8,20 @@ use std::io::{self, Write};
 // Protocol version
 pub const PROTOCOL_VERSION: u8 = 1;
 
+/// Compute a deterministic SSRC from a username using FNV-1a hashing
+/// This allows lightweight voice packets to contain only SSRC instead of full username
+pub fn username_to_ssrc(username: &str) -> u32 {
+    const FNV_OFFSET_BASIS: u32 = 2166136261;
+    const FNV_PRIME: u32 = 16777619;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in username.as_bytes() {
+        hash ^= *byte as u32;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
 // Packet type IDs for TCP control messages
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketTypeId {
@@ -134,6 +148,106 @@ pub fn decode_username(data: &[u8]) -> io::Result<String> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid UTF-8"))
 }
 
+/// Helper to encode username with UDP port into a payload
+/// Format: [username...null][port: u16 BE]
+pub fn encode_username_with_udp_port(username: &str, udp_port: u16) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    buf.write_all(username.as_bytes())?;
+    buf.push(0); // null terminator
+    buf.write_all(&udp_port.to_be_bytes())?;
+    Ok(buf)
+}
+
+/// Helper to decode username with UDP port from a payload
+pub fn decode_username_with_udp_port(data: &[u8]) -> io::Result<(String, u16)> {
+    if data.len() < 3 {
+        // minimum: 1 byte (null terminator) + 2 bytes (port)
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "username with UDP port too short",
+        ));
+    }
+
+    // Find the null terminator
+    let mut pos = 0;
+    while pos < data.len() && data[pos] != 0 {
+        pos += 1;
+    }
+
+    if pos >= data.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "username not null-terminated",
+        ));
+    }
+
+    let username_bytes = &data[..pos];
+    let username = String::from_utf8(username_bytes.to_vec())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid UTF-8"))?;
+    pos += 1; // skip null terminator
+
+    if data.len() < pos + 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "missing UDP port in payload",
+        ));
+    }
+
+    let udp_port = u16::from_be_bytes([data[pos], data[pos + 1]]);
+
+    Ok((username, udp_port))
+}
+
+/// Helper to encode username with SSRC into a payload
+/// Format: [username...null][ssrc: u32]
+pub fn encode_username_with_ssrc(username: &str, ssrc: u32) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    buf.write_all(username.as_bytes())?;
+    buf.push(0); // null terminator
+    buf.write_all(&ssrc.to_be_bytes())?;
+    Ok(buf)
+}
+
+/// Helper to decode username with SSRC from a payload
+pub fn decode_username_with_ssrc(data: &[u8]) -> io::Result<(String, u32)> {
+    if data.len() < 5 {
+        // minimum: 1 byte (null terminator) + 4 bytes (SSRC)
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "username with SSRC too short",
+        ));
+    }
+
+    // Find the null terminator
+    let mut pos = 0;
+    while pos < data.len() && data[pos] != 0 {
+        pos += 1;
+    }
+
+    if pos >= data.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "username not null-terminated",
+        ));
+    }
+
+    let username_bytes = &data[..pos];
+    let username = String::from_utf8(username_bytes.to_vec())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid UTF-8"))?;
+    pos += 1; // skip null terminator
+
+    if data.len() < pos + 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "missing SSRC in payload",
+        ));
+    }
+
+    let ssrc = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+
+    Ok((username, ssrc))
+}
+
 /// Participant info with voice channel status
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParticipantInfo {
@@ -253,11 +367,12 @@ pub fn decode_participant_list(data: &[u8]) -> io::Result<Vec<String>> {
 
 /// UDP voice packet structure
 /// Format: [version: u8][sequence: u32][timestamp: u32][ssrc: u32][opus_frame...]
+/// Lightweight format: SSRC is computed from username, not transmitted
 #[derive(Debug, Clone)]
 pub struct VoicePacket {
     pub sequence: u32,
     pub timestamp: u32,
-    pub ssrc: u32, // Synchronization source (identifies the sender)
+    pub ssrc: u32, // SSRC computed from sender's username
     pub opus_frame: Vec<u8>,
 }
 
@@ -313,7 +428,7 @@ impl VoicePacket {
         pos += 4;
 
         let opus_frame = data[pos..].to_vec();
-        pos = data.len();
+        let final_pos = data.len();
 
         Ok((
             VoicePacket {
@@ -322,7 +437,7 @@ impl VoicePacket {
                 ssrc,
                 opus_frame,
             },
-            pos,
+            final_pos,
         ))
     }
 }
@@ -489,6 +604,41 @@ mod tests {
     }
 
     #[test]
+    fn test_encode_decode_username_with_ssrc() {
+        let username = "alice";
+        let ssrc = 12345u32;
+        let encoded = encode_username_with_ssrc(username, ssrc).expect("encode failed");
+        let (decoded_username, decoded_ssrc) = decode_username_with_ssrc(&encoded).expect("decode failed");
+        assert_eq!(decoded_username, username);
+        assert_eq!(decoded_ssrc, ssrc);
+    }
+
+    #[test]
+    fn test_encode_decode_username_with_ssrc_max_values() {
+        let username = "very_long_username_with_special_chars_こんにちは";
+        let ssrc = u32::MAX;
+        let encoded = encode_username_with_ssrc(username, ssrc).expect("encode failed");
+        let (decoded_username, decoded_ssrc) = decode_username_with_ssrc(&encoded).expect("decode failed");
+        assert_eq!(decoded_username, username);
+        assert_eq!(decoded_ssrc, ssrc);
+    }
+
+    #[test]
+    fn test_decode_username_with_ssrc_too_short() {
+        let data = vec![0x61, 0x62, 0x63]; // "abc" without SSRC
+        let result = decode_username_with_ssrc(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_username_with_ssrc_not_null_terminated() {
+        let mut data = vec![0x61, 0x62, 0x63]; // "abc" without null terminator
+        data.extend_from_slice(&123u32.to_be_bytes());
+        let result = decode_username_with_ssrc(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_encode_decode_participant_list_single() {
         let usernames = vec!["alice"];
         let encoded = encode_participant_list(&usernames).expect("encode failed");
@@ -531,28 +681,30 @@ mod tests {
     #[test]
     fn test_encode_decode_voice_packet() {
         let opus_frame = vec![0xAB, 0xCD, 0xEF, 0x12, 0x34];
-        let packet = VoicePacket::new(42, 1000, 54321, opus_frame.clone());
+        let ssrc = username_to_ssrc("alice");
+        let packet = VoicePacket::new(42, 1000, ssrc, opus_frame.clone());
 
         let encoded = packet.encode().expect("encode failed");
         let (decoded, bytes_read) = VoicePacket::decode(&encoded).expect("decode failed");
 
         assert_eq!(decoded.sequence, 42);
         assert_eq!(decoded.timestamp, 1000);
-        assert_eq!(decoded.ssrc, 54321);
+        assert_eq!(decoded.ssrc, ssrc);
         assert_eq!(decoded.opus_frame, opus_frame);
         assert_eq!(bytes_read, encoded.len());
     }
 
     #[test]
     fn test_encode_decode_voice_packet_empty_opus() {
-        let packet = VoicePacket::new(1, 2, 3, vec![]);
+        let ssrc = username_to_ssrc("bob");
+        let packet = VoicePacket::new(1, 2, ssrc, vec![]);
 
         let encoded = packet.encode().expect("encode failed");
         let (decoded, bytes_read) = VoicePacket::decode(&encoded).expect("decode failed");
 
         assert_eq!(decoded.sequence, 1);
         assert_eq!(decoded.timestamp, 2);
-        assert_eq!(decoded.ssrc, 3);
+        assert_eq!(decoded.ssrc, ssrc);
         assert_eq!(decoded.opus_frame.len(), 0);
         assert_eq!(bytes_read, encoded.len());
     }
@@ -560,14 +712,15 @@ mod tests {
     #[test]
     fn test_encode_decode_voice_packet_large_opus() {
         let opus_frame = vec![0x42; 1200]; // 1200 bytes of data
-        let packet = VoicePacket::new(999, 88888, 77777, opus_frame.clone());
+        let ssrc = username_to_ssrc("charlie");
+        let packet = VoicePacket::new(999, 88888, ssrc, opus_frame.clone());
 
         let encoded = packet.encode().expect("encode failed");
         let (decoded, bytes_read) = VoicePacket::decode(&encoded).expect("decode failed");
 
         assert_eq!(decoded.sequence, 999);
         assert_eq!(decoded.timestamp, 88888);
-        assert_eq!(decoded.ssrc, 77777);
+        assert_eq!(decoded.ssrc, ssrc);
         assert_eq!(decoded.opus_frame, opus_frame);
         assert_eq!(bytes_read, encoded.len());
     }
@@ -610,7 +763,8 @@ mod tests {
     fn test_voice_packet_format_example() {
         // Demonstrate the binary format with a known example
         let opus = b"frame".to_vec();
-        let packet = VoicePacket::new(0x11223344, 0x55667788, 0x99AABBCC, opus);
+        let ssrc = 0xAABBCCDD;
+        let packet = VoicePacket::new(0x11223344, 0x55667788, ssrc, opus);
         let encoded = packet.encode().expect("encode failed");
 
         // Format: [version(1)][sequence(4)][timestamp(4)][ssrc(4)][opus_frame(5)]
@@ -621,7 +775,53 @@ mod tests {
         assert_eq!(encoded[0], PROTOCOL_VERSION); // version
         assert_eq!(&encoded[1..5], &0x11223344u32.to_be_bytes()); // sequence
         assert_eq!(&encoded[5..9], &0x55667788u32.to_be_bytes()); // timestamp
-        assert_eq!(&encoded[9..13], &0x99AABBCCu32.to_be_bytes()); // ssrc
+        assert_eq!(&encoded[9..13], &0xAABBCCDDu32.to_be_bytes()); // ssrc
         assert_eq!(&encoded[13..], b"frame"); // opus_frame
+    }
+
+    #[test]
+    fn test_encode_decode_username_with_udp_port() {
+        let username = "alice";
+        let port = 12345u16;
+
+        let encoded = encode_username_with_udp_port(username, port).expect("encode failed");
+        let (decoded_username, decoded_port) = decode_username_with_udp_port(&encoded).expect("decode failed");
+
+        assert_eq!(decoded_username, username);
+        assert_eq!(decoded_port, port);
+    }
+
+    #[test]
+    fn test_encode_decode_username_with_udp_port_various() {
+        // Test with various port numbers
+        let test_cases = vec![
+            ("alice", 0u16),
+            ("bob", 65535u16),
+            ("charlie", 9002u16),
+            ("diana", 54321u16),
+        ];
+
+        for (username, port) in test_cases {
+            let encoded = encode_username_with_udp_port(username, port).expect("encode failed");
+            let (decoded_username, decoded_port) = decode_username_with_udp_port(&encoded).expect("decode failed");
+
+            assert_eq!(decoded_username, username);
+            assert_eq!(decoded_port, port);
+        }
+    }
+
+    #[test]
+    fn test_decode_username_with_udp_port_too_short() {
+        let data = vec![0x61, 0x62, 0x63]; // "abc" with null term but missing port
+        let result = decode_username_with_udp_port(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_username_with_udp_port_not_null_terminated() {
+        let mut data = vec![0x61, 0x62, 0x63]; // "abc" without null terminator
+        data.extend_from_slice(&12345u16.to_be_bytes());
+        let result = decode_username_with_udp_port(&data);
+        assert!(result.is_err());
     }
 }
