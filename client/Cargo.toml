@@ -3,8 +3,19 @@ name = "voiceapp-client"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "voiceapp_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "voiceapp-client"
+path = "src/main.rs"
+
 [dependencies]
 voiceapp-common = { path = "../common" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+cpal = "0.16"
+opus = "0.3"
+rand = "0.8"
