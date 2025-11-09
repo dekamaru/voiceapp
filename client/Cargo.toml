@@ -1,0 +1,10 @@
+[package]
+name = "voiceapp-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+voiceapp-common = { path = "../common" }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
