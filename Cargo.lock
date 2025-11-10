@@ -833,6 +833,7 @@ version = "0.1.0"
 name = "voiceapp-server"
 version = "0.1.0"
 dependencies = [
+ "rand",
  "tokio",
  "tracing",
  "tracing-subscriber",

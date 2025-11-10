@@ -1,7 +1,8 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tracing::{debug, info};
-use voiceapp_common::VoicePacket;
+use voiceapp_common::{VoicePacket, UdpAuthResponse};
 
 /// Sends voice packets over UDP to the server
 pub struct UdpVoiceSender {
@@ -36,6 +37,39 @@ impl UdpVoiceSender {
             self.send_packet(packet).await?;
         }
         Ok(())
+    }
+
+    /// Send raw data to the server (e.g., auth packets)
+    pub async fn send_raw(&self, data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        self.socket.send_to(data, self.server_addr).await?;
+        debug!("Sent raw data: {} bytes", data.len());
+        Ok(())
+    }
+
+    /// Wait for auth response from server with timeout
+    pub async fn wait_auth_response(&self, timeout_secs: u64) -> Result<bool, Box<dyn std::error::Error>> {
+        let mut buf = [0u8; 256];
+        match tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            self.socket.recv(&mut buf),
+        ).await {
+            Ok(Ok(n)) => {
+                match UdpAuthResponse::decode(&buf[..n]) {
+                    Ok(response) => {
+                        if response.success {
+                            debug!("Auth response received: SUCCESS");
+                            Ok(true)
+                        } else {
+                            debug!("Auth response received: FAILURE");
+                            Ok(false)
+                        }
+                    }
+                    Err(e) => Err(format!("Failed to decode auth response: {}", e).into()),
+                }
+            }
+            Ok(Err(e)) => Err(format!("Failed to receive auth response: {}", e).into()),
+            Err(_) => Err("Auth response timeout".into()),
+        }
     }
 }
 

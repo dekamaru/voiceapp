@@ -26,24 +26,26 @@ pub fn username_to_ssrc(username: &str) -> u32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketTypeId {
     Login = 0x01,
-    UserJoinedServer = 0x02,
-    JoinVoiceChannel = 0x03,
-    UserJoinedVoice = 0x04,
-    UserLeftVoice = 0x05,
-    UserLeftServer = 0x06,
-    ServerParticipantList = 0x07,
+    LoginResponse = 0x02,
+    UserJoinedServer = 0x03,
+    JoinVoiceChannel = 0x04,
+    UserJoinedVoice = 0x05,
+    UserLeftVoice = 0x06,
+    UserLeftServer = 0x07,
+    ServerParticipantList = 0x08,
 }
 
 impl PacketTypeId {
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
             0x01 => Some(PacketTypeId::Login),
-            0x02 => Some(PacketTypeId::UserJoinedServer),
-            0x03 => Some(PacketTypeId::JoinVoiceChannel),
-            0x04 => Some(PacketTypeId::UserJoinedVoice),
-            0x05 => Some(PacketTypeId::UserLeftVoice),
-            0x06 => Some(PacketTypeId::UserLeftServer),
-            0x07 => Some(PacketTypeId::ServerParticipantList),
+            0x02 => Some(PacketTypeId::LoginResponse),
+            0x03 => Some(PacketTypeId::UserJoinedServer),
+            0x04 => Some(PacketTypeId::JoinVoiceChannel),
+            0x05 => Some(PacketTypeId::UserJoinedVoice),
+            0x06 => Some(PacketTypeId::UserLeftVoice),
+            0x07 => Some(PacketTypeId::UserLeftServer),
+            0x08 => Some(PacketTypeId::ServerParticipantList),
             _ => None,
         }
     }
@@ -316,6 +318,27 @@ pub fn decode_participant_list_with_voice(data: &[u8]) -> io::Result<Vec<Partici
     Ok(participants)
 }
 
+/// Helper to encode voice token into a payload
+/// Format: [token: u64 BE]
+pub fn encode_voice_token(token: u64) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    buf.write_all(&token.to_be_bytes())?;
+    Ok(buf)
+}
+
+/// Helper to decode voice token from a payload
+pub fn decode_voice_token(data: &[u8]) -> io::Result<u64> {
+    if data.len() < 8 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "token payload too short",
+        ));
+    }
+    Ok(u64::from_be_bytes([
+        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+    ]))
+}
+
 /// Helper to encode participant list into a payload (legacy, no voice status)
 /// Format: [count: u16][username1...null][username2...null]...[usernameN...null]
 pub fn encode_participant_list(usernames: &[&str]) -> io::Result<Vec<u8>> {
@@ -363,6 +386,128 @@ pub fn decode_participant_list(data: &[u8]) -> io::Result<Vec<String>> {
     }
 
     Ok(usernames)
+}
+
+/// UDP authentication packet structure
+/// Format: [version: u8][token: u64][username...null]
+/// Sent once when client joins voice channel to authenticate
+#[derive(Debug, Clone)]
+pub struct UdpAuthPacket {
+    pub token: u64,
+    pub username: String,
+}
+
+/// UDP authentication response packet structure
+/// Format: [version: u8][success: u8]
+/// Server responds with success (1) or failure (0)
+#[derive(Debug, Clone)]
+pub struct UdpAuthResponse {
+    pub success: bool,
+}
+
+impl UdpAuthResponse {
+    pub fn new(success: bool) -> Self {
+        UdpAuthResponse { success }
+    }
+
+    /// Encode response to binary format
+    pub fn encode(&self) -> io::Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        buf.write_all(&[PROTOCOL_VERSION])?;
+        buf.write_all(&[if self.success { 1u8 } else { 0u8 }])?;
+        Ok(buf)
+    }
+
+    /// Decode response from binary format
+    pub fn decode(data: &[u8]) -> io::Result<Self> {
+        if data.len() < 2 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "auth response too short",
+            ));
+        }
+
+        let version = data[0];
+        if version != PROTOCOL_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unsupported protocol version",
+            ));
+        }
+
+        let success = data[1] != 0;
+        Ok(UdpAuthResponse { success })
+    }
+}
+
+impl UdpAuthPacket {
+    pub fn new(token: u64, username: String) -> Self {
+        UdpAuthPacket { token, username }
+    }
+
+    /// Encode auth packet to binary format
+    pub fn encode(&self) -> io::Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        buf.write_all(&[PROTOCOL_VERSION])?;
+        buf.write_all(&self.token.to_be_bytes())?;
+        buf.write_all(self.username.as_bytes())?;
+        buf.push(0); // null terminator
+        Ok(buf)
+    }
+
+    /// Decode auth packet from binary format
+    pub fn decode(data: &[u8]) -> io::Result<(Self, usize)> {
+        if data.len() < 10 {
+            // 1 (version) + 8 (token) + 1 (null terminator minimum)
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "auth packet too short",
+            ));
+        }
+
+        let mut pos = 0;
+        let version = data[pos];
+        pos += 1;
+
+        if version != PROTOCOL_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unsupported protocol version",
+            ));
+        }
+
+        let token = u64::from_be_bytes([
+            data[pos],
+            data[pos + 1],
+            data[pos + 2],
+            data[pos + 3],
+            data[pos + 4],
+            data[pos + 5],
+            data[pos + 6],
+            data[pos + 7],
+        ]);
+        pos += 8;
+
+        // Find null terminator
+        let start = pos;
+        while pos < data.len() && data[pos] != 0 {
+            pos += 1;
+        }
+
+        if pos >= data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "username not null-terminated in auth packet",
+            ));
+        }
+
+        let username_bytes = &data[start..pos];
+        let username = String::from_utf8(username_bytes.to_vec())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid UTF-8 in username"))?;
+        pos += 1; // skip null terminator
+
+        Ok((UdpAuthPacket { token, username }, pos))
+    }
 }
 
 /// UDP voice packet structure
@@ -822,6 +967,127 @@ mod tests {
         let mut data = vec![0x61, 0x62, 0x63]; // "abc" without null terminator
         data.extend_from_slice(&12345u16.to_be_bytes());
         let result = decode_username_with_udp_port(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encode_decode_udp_auth_packet() {
+        let token = 0x0123456789ABCDEFu64;
+        let username = "alice";
+        let packet = UdpAuthPacket::new(token, username.to_string());
+
+        let encoded = packet.encode().expect("encode failed");
+        let (decoded, bytes_read) = UdpAuthPacket::decode(&encoded).expect("decode failed");
+
+        assert_eq!(decoded.token, token);
+        assert_eq!(decoded.username, username);
+        assert_eq!(bytes_read, encoded.len());
+    }
+
+    #[test]
+    fn test_encode_decode_udp_auth_packet_various() {
+        let test_cases = vec![
+            (0u64, "alice"),
+            (u64::MAX, "bob"),
+            (12345u64, "charlie"),
+            (0x0123456789ABCDEFu64, "diana"),
+        ];
+
+        for (token, username) in test_cases {
+            let packet = UdpAuthPacket::new(token, username.to_string());
+            let encoded = packet.encode().expect("encode failed");
+            let (decoded, _) = UdpAuthPacket::decode(&encoded).expect("decode failed");
+
+            assert_eq!(decoded.token, token);
+            assert_eq!(decoded.username, username);
+        }
+    }
+
+    #[test]
+    fn test_decode_udp_auth_packet_too_short() {
+        let data = vec![PROTOCOL_VERSION, 0, 0, 0, 0];
+        let result = UdpAuthPacket::decode(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_udp_auth_packet_not_null_terminated() {
+        let mut data = vec![PROTOCOL_VERSION];
+        data.extend_from_slice(&0u64.to_be_bytes());
+        data.extend_from_slice(b"alice"); // no null terminator
+        let result = UdpAuthPacket::decode(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_udp_auth_packet_bad_version() {
+        let mut data = vec![PROTOCOL_VERSION + 1];
+        data.extend_from_slice(&0u64.to_be_bytes());
+        data.extend_from_slice(b"alice\0");
+        let result = UdpAuthPacket::decode(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encode_decode_udp_auth_response_success() {
+        let response = UdpAuthResponse::new(true);
+        let encoded = response.encode().expect("encode failed");
+        let decoded = UdpAuthResponse::decode(&encoded).expect("decode failed");
+        assert!(decoded.success);
+    }
+
+    #[test]
+    fn test_encode_decode_udp_auth_response_failure() {
+        let response = UdpAuthResponse::new(false);
+        let encoded = response.encode().expect("encode failed");
+        let decoded = UdpAuthResponse::decode(&encoded).expect("decode failed");
+        assert!(!decoded.success);
+    }
+
+    #[test]
+    fn test_decode_udp_auth_response_too_short() {
+        let data = vec![PROTOCOL_VERSION];
+        let result = UdpAuthResponse::decode(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_udp_auth_response_bad_version() {
+        let data = vec![PROTOCOL_VERSION + 1, 1];
+        let result = UdpAuthResponse::decode(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encode_decode_voice_token() {
+        let token = 0x0123456789ABCDEFu64;
+        let encoded = encode_voice_token(token).expect("encode failed");
+        let decoded = decode_voice_token(&encoded).expect("decode failed");
+        assert_eq!(decoded, token);
+    }
+
+    #[test]
+    fn test_encode_decode_voice_token_various() {
+        let test_cases = vec![0u64, u64::MAX, 12345u64, 0x0123456789ABCDEFu64];
+
+        for token in test_cases {
+            let encoded = encode_voice_token(token).expect("encode failed");
+            let decoded = decode_voice_token(&encoded).expect("decode failed");
+            assert_eq!(decoded, token);
+        }
+    }
+
+    #[test]
+    fn test_decode_voice_token_too_short() {
+        let data = vec![0x01, 0x02, 0x03];
+        let result = decode_voice_token(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_voice_token_empty() {
+        let data = vec![];
+        let result = decode_voice_token(&data);
         assert!(result.is_err());
     }
 }

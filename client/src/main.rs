@@ -14,7 +14,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn, debug};
-use voiceapp_common::{TcpPacket, PacketTypeId, encode_username, decode_username, decode_participant_list_with_voice, username_to_ssrc, encode_username_with_udp_port, VoicePacket};
+use voiceapp_common::{TcpPacket, PacketTypeId, encode_username, decode_username, decode_participant_list_with_voice, username_to_ssrc, VoicePacket, UdpAuthPacket, decode_voice_token};
 use audio::AudioInputHandle;
 use voice::VoiceEncoder;
 use udp_voice::UdpVoiceSender;
@@ -122,6 +122,20 @@ async fn pretty_print_packet(packet: &TcpPacket, voice_state: &VoiceState) {
         PacketTypeId::UserLeftServer => {
             if let Ok(username) = decode_username(&packet.payload) {
                 info!("User left server: {}", username);
+            }
+        }
+        PacketTypeId::LoginResponse => {
+            match decode_voice_token(&packet.payload) {
+                Ok(token) => {
+                    // Store the token for UDP voice authentication
+                    let mut token_lock = voice_state.voice_token.write().await;
+                    *token_lock = Some(token);
+                    debug!("UDP voice token received in LoginResponse: {}", token);
+                    info!("Successfully logged in with UDP voice token");
+                }
+                Err(e) => {
+                    error!("Failed to decode UDP voice token from LoginResponse: {}", e);
+                }
             }
         }
         PacketTypeId::ServerParticipantList => {
@@ -236,6 +250,8 @@ struct VoiceState {
     receiver: Arc<UdpVoiceReceiver>,
     // Keep audio output handles alive for the lifetime of the session
     audio_outputs: Arc<RwLock<std::collections::HashMap<String, output::AudioOutputHandle>>>,
+    // Token for UDP voice authentication
+    voice_token: Arc<RwLock<Option<u64>>>,
 }
 
 impl VoiceState {
@@ -250,6 +266,7 @@ impl VoiceState {
             manager,
             receiver,
             audio_outputs: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            voice_token: Arc::new(RwLock::new(None)),
         })
     }
 }
@@ -298,80 +315,135 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
                             if audio_state.is_recording() {
                                 warn!("User already in voice channel");
                             } else {
-                                // Start audio input stream
-                                match audio::create_input_stream() {
-                                    Ok(mut audio_handle) => {
-                                        // Create voice encoder
-                                        match VoiceEncoder::new(username.to_string()) {
-                                            Ok(mut encoder) => {
-                                                // Create UDP voice sender
-                                                let server_voice_addr = server_addr.replace("9001", "9002");
-                                                match UdpVoiceSender::new("127.0.0.1:0", &server_voice_addr).await {
-                                                    Ok(udp_sender) => {
-                                                        // Extract receiver from audio handle
-                                                        match audio_handle.take_receiver() {
-                                                            Ok(receiver) => {
-                                                                // Spawn encoding task
-                                                                let encoding_task = tokio::spawn(async move {
-                                                                    let mut receiver = receiver;
-                                                                    while let Some(audio_frame) = receiver.recv().await {
-                                                                        match encoder.encode_frame(&audio_frame) {
-                                                                            Ok(packets) => {
-                                                                                for packet in packets {
-                                                                                    if let Err(e) = udp_sender.send_packet(&packet).await {
-                                                                                        error!("Failed to send voice packet: {}", e);
+                                // First, request to join voice channel
+                                let payload = encode_username(username);
+                                let pkt = TcpPacket::new(PacketTypeId::JoinVoiceChannel, payload);
+                                match socket.write_all(&pkt.encode()?).await {
+                                    Ok(_) => {
+                                        socket.flush().await?;
+                                        info!("Sent join voice channel request");
+
+                                        // Start audio input stream
+                                        match audio::create_input_stream() {
+                                            Ok(mut audio_handle) => {
+                                                // Create voice encoder
+                                                match VoiceEncoder::new(username.to_string()) {
+                                                    Ok(mut encoder) => {
+                                                        // Create UDP voice sender
+                                                        let server_voice_addr = server_addr.replace("9001", "9002");
+                                                        match UdpVoiceSender::new("127.0.0.1:0", &server_voice_addr).await {
+                                                            Ok(udp_sender) => {
+                                                                // Get the token received during login
+                                                                let token = {
+                                                                    let token_lock = voice_state.voice_token.read().await;
+                                                                    token_lock.clone()
+                                                                };
+
+                                                                if let Some(token) = token {
+                                                                    debug!("Using UDP voice token for authentication: {}", token);
+                                                                    // Send auth packet with retries (3 attempts, 5 seconds timeout each)
+                                                                    let max_attempts = 3;
+                                                                    let mut auth_success = false;
+
+                                                                    for attempt in 1..=max_attempts {
+                                                                        let auth_packet = UdpAuthPacket::new(token, username.to_string());
+                                                                        match auth_packet.encode() {
+                                                                            Ok(auth_data) => {
+                                                                                if let Err(e) = udp_sender.send_raw(&auth_data).await {
+                                                                                    error!("Attempt {}: Failed to send auth packet: {}", attempt, e);
+                                                                                    continue;
+                                                                                }
+                                                                                debug!("Attempt {}: Sent UDP auth packet with token", attempt);
+
+                                                                                // Wait for auth response with 5-second timeout
+                                                                                match udp_sender.wait_auth_response(5).await {
+                                                                                    Ok(true) => {
+                                                                                        info!("Attempt {}: Auth response received - SUCCESS", attempt);
+                                                                                        auth_success = true;
+                                                                                        break;
+                                                                                    }
+                                                                                    Ok(false) => {
+                                                                                        error!("Attempt {}: Auth response received - FAILURE", attempt);
+                                                                                        continue;
+                                                                                    }
+                                                                                    Err(e) => {
+                                                                                        warn!("Attempt {}: Auth response error: {}", attempt, e);
+                                                                                        continue;
                                                                                     }
                                                                                 }
                                                                             }
                                                                             Err(e) => {
-                                                                                error!("Failed to encode audio: {}", e);
+                                                                                error!("Attempt {}: Failed to encode auth packet: {}", attempt, e);
+                                                                                continue;
                                                                             }
                                                                         }
                                                                     }
-                                                                    // Flush any remaining samples
-                                                                    if let Ok(Some(packet)) = encoder.flush() {
-                                                                        let _ = udp_sender.send_packet(&packet).await;
-                                                                    }
-                                                                });
 
-                                                                audio_state = AudioState::Recording {
-                                                                    _audio_handle: audio_handle,
-                                                                    _encoding_task: encoding_task,
-                                                                };
+                                                                    if auth_success {
+                                                                        // Extract receiver from audio handle
+                                                                        match audio_handle.take_receiver() {
+                                                                            Ok(receiver) => {
+                                                                                // Spawn encoding task
+                                                                                let encoding_task = tokio::spawn(async move {
+                                                                                    let mut receiver = receiver;
+                                                                                    while let Some(audio_frame) = receiver.recv().await {
+                                                                                        match encoder.encode_frame(&audio_frame) {
+                                                                                            Ok(packets) => {
+                                                                                                for packet in packets {
+                                                                                                    if let Err(e) = udp_sender.send_packet(&packet).await {
+                                                                                                        error!("Failed to send voice packet: {}", e);
+                                                                                                    }
+                                                                                                }
+                                                                                            }
+                                                                                            Err(e) => {
+                                                                                                error!("Failed to encode audio: {}", e);
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                    // Flush any remaining samples
+                                                                                    if let Ok(Some(packet)) = encoder.flush() {
+                                                                                        let _ = udp_sender.send_packet(&packet).await;
+                                                                                    }
+                                                                                });
 
-                                                                // Send join packet with UDP address
-                                                                let udp_port = voice_state.receiver.local_addr()?.port();
-                                                                let payload = encode_username_with_udp_port(username, udp_port)?;
-                                                                let pkt = TcpPacket::new(PacketTypeId::JoinVoiceChannel, payload);
-                                                                match socket.write_all(&pkt.encode()?).await {
-                                                                    Ok(_) => {
-                                                                        socket.flush().await?;
-                                                                        info!("Joined voice channel (UDP: 127.0.0.1:{}) and started recording audio", udp_port);
-                                                                    }
-                                                                    Err(e) => {
-                                                                        error!("Failed to send join packet: {}", e);
-                                                                        // Revert audio state on error
+                                                                                audio_state = AudioState::Recording {
+                                                                                    _audio_handle: audio_handle,
+                                                                                    _encoding_task: encoding_task,
+                                                                                };
+
+                                                                                info!("Joined voice channel and started recording audio");
+                                                                            }
+                                                                            Err(e) => {
+                                                                                error!("Failed to extract audio receiver: {}", e);
+                                                                                audio_state = AudioState::Idle;
+                                                                            }
+                                                                        }
+                                                                    } else {
+                                                                        error!("Failed to authenticate with voice server after {} attempts", max_attempts);
                                                                         audio_state = AudioState::Idle;
                                                                     }
+                                                                } else {
+                                                                    error!("UDP voice token not available - not logged in or token not received");
+                                                                    audio_state = AudioState::Idle;
                                                                 }
                                                             }
                                                             Err(e) => {
-                                                                error!("Failed to extract audio receiver: {}", e);
+                                                                error!("Failed to create UDP voice sender: {}", e);
                                                             }
                                                         }
                                                     }
                                                     Err(e) => {
-                                                        error!("Failed to create UDP voice sender: {}", e);
+                                                        error!("Failed to create voice encoder: {}", e);
                                                     }
                                                 }
                                             }
                                             Err(e) => {
-                                                error!("Failed to create voice encoder: {}", e);
+                                                error!("Failed to initialize audio: {}", e);
                                             }
                                         }
                                     }
                                     Err(e) => {
-                                        error!("Failed to initialize audio: {}", e);
+                                        error!("Failed to send join packet: {}", e);
                                     }
                                 }
                             }
@@ -436,7 +508,18 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    #[cfg(debug_assertions)]
+    {
+        use tracing::Level;
+        tracing_subscriber::fmt()
+            .with_max_level(Level::DEBUG)
+            .init();
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        tracing_subscriber::fmt::init();
+    }
 
     // Hardcoded username and server address for now
     let username = std::env::args()

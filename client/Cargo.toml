@@ -3,10 +3,6 @@ name = "voiceapp-client"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-name = "voiceapp_client"
-path = "src/lib.rs"
-
 [[bin]]
 name = "voiceapp-client"
 path = "src/main.rs"
