@@ -314,8 +314,7 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
                                 warn!("User already in voice channel");
                             } else {
                                 // First, request to join voice channel
-                                let payload = encode_username(username);
-                                let pkt = TcpPacket::new(PacketTypeId::JoinVoiceChannel, payload);
+                                let pkt = TcpPacket::new(PacketTypeId::JoinVoiceChannel, vec![]);
                                 match socket.write_all(&pkt.encode()?).await {
                                     Ok(_) => {
                                         socket.flush().await?;
@@ -342,7 +341,7 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
                                                             let mut auth_success = false;
 
                                                             for attempt in 1..=max_attempts {
-                                                                let auth_packet = UdpAuthPacket::new(token, username.to_string());
+                                                                let auth_packet = UdpAuthPacket::new(token);
                                                                 match auth_packet.encode() {
                                                                     Ok(auth_data) => {
                                                                         // Send from receiver socket so server knows to send packets back to receiver port
@@ -454,7 +453,7 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
                                 audio_state = AudioState::Idle;
 
                                 // Send leave packet
-                                let pkt = TcpPacket::new(PacketTypeId::UserLeftVoice, encode_username(username));
+                                let pkt = TcpPacket::new(PacketTypeId::UserLeftVoice, vec![]);
                                 match socket.write_all(&pkt.encode()?).await {
                                     Ok(_) => {
                                         socket.flush().await?;

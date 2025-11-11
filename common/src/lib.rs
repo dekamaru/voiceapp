@@ -389,12 +389,11 @@ pub fn decode_participant_list(data: &[u8]) -> io::Result<Vec<String>> {
 }
 
 /// UDP authentication packet structure
-/// Format: [version: u8][token: u64][username...null]
+/// Format: [version: u8][token: u64]
 /// Sent once when client joins voice channel to authenticate
 #[derive(Debug, Clone)]
 pub struct UdpAuthPacket {
     pub token: u64,
-    pub username: String,
 }
 
 /// UDP authentication response packet structure
@@ -441,8 +440,8 @@ impl UdpAuthResponse {
 }
 
 impl UdpAuthPacket {
-    pub fn new(token: u64, username: String) -> Self {
-        UdpAuthPacket { token, username }
+    pub fn new(token: u64) -> Self {
+        UdpAuthPacket { token }
     }
 
     /// Encode auth packet to binary format
@@ -450,15 +449,13 @@ impl UdpAuthPacket {
         let mut buf = Vec::new();
         buf.write_all(&[PROTOCOL_VERSION])?;
         buf.write_all(&self.token.to_be_bytes())?;
-        buf.write_all(self.username.as_bytes())?;
-        buf.push(0); // null terminator
         Ok(buf)
     }
 
     /// Decode auth packet from binary format
     pub fn decode(data: &[u8]) -> io::Result<(Self, usize)> {
-        if data.len() < 10 {
-            // 1 (version) + 8 (token) + 1 (null terminator minimum)
+        if data.len() < 9 {
+            // 1 (version) + 8 (token)
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "auth packet too short",
@@ -488,25 +485,7 @@ impl UdpAuthPacket {
         ]);
         pos += 8;
 
-        // Find null terminator
-        let start = pos;
-        while pos < data.len() && data[pos] != 0 {
-            pos += 1;
-        }
-
-        if pos >= data.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "username not null-terminated in auth packet",
-            ));
-        }
-
-        let username_bytes = &data[start..pos];
-        let username = String::from_utf8(username_bytes.to_vec())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid UTF-8 in username"))?;
-        pos += 1; // skip null terminator
-
-        Ok((UdpAuthPacket { token, username }, pos))
+        Ok((UdpAuthPacket { token }, pos))
     }
 }
 
@@ -975,33 +954,30 @@ mod tests {
     #[test]
     fn test_encode_decode_udp_auth_packet() {
         let token = 0x0123456789ABCDEFu64;
-        let username = "alice";
-        let packet = UdpAuthPacket::new(token, username.to_string());
+        let packet = UdpAuthPacket::new(token);
 
         let encoded = packet.encode().expect("encode failed");
         let (decoded, bytes_read) = UdpAuthPacket::decode(&encoded).expect("decode failed");
 
         assert_eq!(decoded.token, token);
-        assert_eq!(decoded.username, username);
         assert_eq!(bytes_read, encoded.len());
     }
 
     #[test]
     fn test_encode_decode_udp_auth_packet_various() {
         let test_cases = vec![
-            (0u64, "alice"),
-            (u64::MAX, "bob"),
-            (12345u64, "charlie"),
-            (0x0123456789ABCDEFu64, "diana"),
+            0u64,
+            u64::MAX,
+            12345u64,
+            0x0123456789ABCDEFu64,
         ];
 
-        for (token, username) in test_cases {
-            let packet = UdpAuthPacket::new(token, username.to_string());
+        for token in test_cases {
+            let packet = UdpAuthPacket::new(token);
             let encoded = packet.encode().expect("encode failed");
             let (decoded, _) = UdpAuthPacket::decode(&encoded).expect("decode failed");
 
             assert_eq!(decoded.token, token);
-            assert_eq!(decoded.username, username);
         }
     }
 
@@ -1012,14 +988,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_decode_udp_auth_packet_not_null_terminated() {
-        let mut data = vec![PROTOCOL_VERSION];
-        data.extend_from_slice(&0u64.to_be_bytes());
-        data.extend_from_slice(b"alice"); // no null terminator
-        let result = UdpAuthPacket::decode(&data);
-        assert!(result.is_err());
-    }
 
     #[test]
     fn test_decode_udp_auth_packet_bad_version() {
