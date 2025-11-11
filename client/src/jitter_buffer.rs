@@ -89,21 +89,6 @@ impl JitterBuffer {
     pub fn next_available(&mut self) -> Option<VoicePacket> {
         self.try_decode_next()
     }
-
-    /// Get the next sequence number expected
-    pub fn next_sequence(&self) -> u32 {
-        self.next_seq
-    }
-
-    /// Get number of packets currently buffered
-    pub fn buffered_count(&self) -> usize {
-        self.buffer.len()
-    }
-
-    /// Clear the buffer (useful on stream reset)
-    pub fn clear(&mut self) {
-        self.buffer.clear();
-    }
 }
 
 #[cfg(test)]
@@ -123,8 +108,6 @@ mod tests {
         assert!(jb.insert(create_packet(0, vec![1, 2, 3])).is_some());
         assert!(jb.insert(create_packet(1, vec![4, 5, 6])).is_some());
         assert!(jb.insert(create_packet(2, vec![7, 8, 9])).is_some());
-
-        assert_eq!(jb.next_sequence(), 3);
     }
 
     #[test]
@@ -153,9 +136,6 @@ mod tests {
         let pkt = jb.insert(create_packet(3, vec![10, 11, 12]));
         assert!(pkt.is_some());
         assert_eq!(pkt.unwrap().sequence, 3);
-
-        assert_eq!(jb.next_sequence(), 4);
-        assert_eq!(jb.buffered_count(), 0);
     }
 
     #[test]
@@ -165,8 +145,6 @@ mod tests {
         // Insert same packet twice
         assert!(jb.insert(create_packet(0, vec![1, 2, 3])).is_some());
         assert!(jb.insert(create_packet(0, vec![1, 2, 3])).is_none()); // Already decoded
-
-        assert_eq!(jb.next_sequence(), 1);
     }
 
     #[test]
@@ -179,8 +157,6 @@ mod tests {
 
         // Try to insert old packet
         assert!(jb.insert(create_packet(0, vec![1, 2, 3])).is_none()); // Dropped as old
-
-        assert_eq!(jb.next_sequence(), 2);
     }
 
     #[test]
@@ -216,8 +192,6 @@ mod tests {
         assert!(jb.insert(create_packet(seq1, vec![1])).is_some());
         assert!(jb.insert(create_packet(seq2, vec![2])).is_some());
         assert!(jb.insert(create_packet(seq3, vec![3])).is_some());
-
-        assert_eq!(jb.next_sequence(), 1000003);
     }
 
     #[test]

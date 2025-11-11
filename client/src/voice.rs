@@ -1,6 +1,4 @@
 use opus::{Channels, Encoder};
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::debug;
 use voiceapp_common::{VoicePacket, username_to_ssrc};
 
@@ -51,8 +49,6 @@ impl VoiceEncoder {
                 .map_err(|e| format!("Failed to encode Opus frame: {:?}", e))?;
             opus_frame.truncate(encoded_size);
 
-            debug!("Encoded {} samples to {} bytes", OPUS_FRAME_SAMPLES, encoded_size);
-
             let packet = VoicePacket::new(self.sequence, self.timestamp, self.ssrc, opus_frame);
             packets.push(packet);
 
@@ -86,33 +82,6 @@ impl VoiceEncoder {
         let packet = VoicePacket::new(self.sequence, self.timestamp, self.ssrc, opus_frame);
 
         Ok(Some(packet))
-    }
-}
-
-/// Thread-safe wrapper for voice encoding
-pub struct VoiceEncoderHandle {
-    encoder: Arc<Mutex<VoiceEncoder>>,
-}
-
-impl VoiceEncoderHandle {
-    /// Create a new encoder handle for the given username
-    pub fn new(username: String) -> Result<Self, opus::Error> {
-        let encoder = VoiceEncoder::new(username)?;
-        Ok(VoiceEncoderHandle {
-            encoder: Arc::new(Mutex::new(encoder)),
-        })
-    }
-
-    /// Encode audio samples asynchronously
-    pub async fn encode_frame(&self, samples: Vec<f32>) -> Result<Vec<VoicePacket>, String> {
-        let mut encoder = self.encoder.lock().await;
-        encoder.encode_frame(&samples)
-    }
-
-    /// Flush remaining samples
-    pub async fn flush(&self) -> Result<Option<VoicePacket>, String> {
-        let mut encoder = self.encoder.lock().await;
-        encoder.flush()
     }
 }
 

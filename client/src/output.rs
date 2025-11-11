@@ -1,17 +1,19 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig, SampleRate, SampleFormat};
-use tokio::sync::mpsc;
+use std::sync::mpsc;
 use tracing::{debug, error, info};
+use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
 
 const TARGET_SAMPLE_RATE: u32 = 48000;
-const OUTPUT_BUFFER_CAPACITY: usize = 9600; // ~100ms at 48kHz stereo
+const OUTPUT_BUFFER_CAPACITY: usize = 48000; // ~500ms at 48kHz for continuous sample buffer
 
 /// Audio frame for playback: stereo F32 samples at 48kHz
 pub type PlaybackFrame = Vec<f32>;
 
 /// Handle to manage audio output stream for a single user
 pub struct AudioOutputHandle {
-    stream: Stream,
+    _stream: Stream, // kept alive to maintain audio stream
     sender: mpsc::Sender<PlaybackFrame>,
 }
 
@@ -19,11 +21,6 @@ impl AudioOutputHandle {
     /// Get sender to queue audio frames for playback
     pub fn sender(&self) -> mpsc::Sender<PlaybackFrame> {
         self.sender.clone()
-    }
-
-    /// Stop the audio stream
-    pub fn stop(self) {
-        drop(self.stream);
     }
 }
 
@@ -102,6 +99,7 @@ fn get_stream_config(device: &Device) -> Result<(StreamConfig, SampleFormat), Bo
 
 /// Create output stream for playing back audio from a specific user
 pub fn create_output_stream() -> Result<AudioOutputHandle, Box<dyn std::error::Error>> {
+    debug!("Creating output stream...");
     let device = find_output_device()?;
     let (config, format) = get_stream_config(&device)?;
 
@@ -110,33 +108,49 @@ pub fn create_output_stream() -> Result<AudioOutputHandle, Box<dyn std::error::E
         config.channels, config.sample_rate.0, format
     );
 
-    let (tx, mut rx) = mpsc::channel::<PlaybackFrame>(OUTPUT_BUFFER_CAPACITY / 480);
+    let (tx, rx) = mpsc::channel::<PlaybackFrame>();
+
+    // Use a continuous sample buffer (VecDeque) instead of frame-based delivery
+    // This handles variable cpal callback sizes and prevents timing misalignment
+    let sample_buffer = Arc::new(Mutex::new(VecDeque::<f32>::with_capacity(OUTPUT_BUFFER_CAPACITY)));
+
+    // Spawn task to receive frames and feed them into the sample buffer
+    let sample_buffer_clone = sample_buffer.clone();
+    tokio::spawn(async move {
+        while let Ok(frame) = rx.recv() {
+            let mut buffer = sample_buffer_clone.lock().unwrap();
+            buffer.extend(frame.iter().cloned());
+
+            // Log if buffer is getting full
+            if buffer.len() > OUTPUT_BUFFER_CAPACITY * 90 / 100 {
+                debug!("Output buffer near capacity: {} samples", buffer.len());
+            }
+        }
+    });
 
     // Build stream matching the format
     let stream = match format {
         SampleFormat::F32 => {
+            let sample_buffer = sample_buffer.clone();
             device.build_output_stream(
                 &config,
                 move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    // Try to get next frame from receiver
-                    let frame = match rx.try_recv() {
-                        Ok(frame) => frame,
-                        Err(_) => {
-                            // No data available, output silence
-                            for sample in output.iter_mut() {
-                                *sample = 0.0;
-                            }
-                            return;
+                    let mut buffer = sample_buffer.lock().unwrap();
+
+                    // Fill output buffer sample by sample from the VecDeque
+                    let mut filled = 0;
+                    for sample in output.iter_mut() {
+                        if let Some(s) = buffer.pop_front() {
+                            *sample = s;
+                            filled += 1;
+                        } else {
+                            // No more samples available, fill with silence
+                            *sample = 0.0;
                         }
-                    };
+                    }
 
-                    // Copy frame to output buffer
-                    let copy_len = frame.len().min(output.len());
-                    output[..copy_len].copy_from_slice(&frame[..copy_len]);
-
-                    // Pad remaining with silence
-                    for sample in output[copy_len..].iter_mut() {
-                        *sample = 0.0;
+                    if filled < output.len() {
+                        debug!("Output callback: buffer underrun, filled {}/{} samples", filled, output.len());
                     }
                 },
                 move |err| {
@@ -146,29 +160,25 @@ pub fn create_output_stream() -> Result<AudioOutputHandle, Box<dyn std::error::E
             )?
         }
         SampleFormat::I16 => {
+            let sample_buffer = sample_buffer.clone();
             device.build_output_stream(
                 &config,
                 move |output: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    let frame = match rx.try_recv() {
-                        Ok(frame) => frame,
-                        Err(_) => {
-                            // No data, output silence
-                            for sample in output.iter_mut() {
-                                *sample = 0;
-                            }
-                            return;
-                        }
-                    };
+                    let mut buffer = sample_buffer.lock().unwrap();
 
-                    // Convert F32 to I16 and copy
-                    let copy_len = frame.len().min(output.len());
-                    for i in 0..copy_len {
-                        output[i] = (frame[i] * 32767.0).clamp(-32768.0, 32767.0) as i16;
+                    // Fill output buffer sample by sample from the VecDeque
+                    let mut filled = 0;
+                    for sample in output.iter_mut() {
+                        if let Some(s) = buffer.pop_front() {
+                            *sample = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
+                            filled += 1;
+                        } else {
+                            *sample = 0;
+                        }
                     }
 
-                    // Pad with silence
-                    for sample in output[copy_len..].iter_mut() {
-                        *sample = 0;
+                    if filled < output.len() {
+                        debug!("Output callback: buffer underrun, filled {}/{} samples", filled, output.len());
                     }
                 },
                 move |err| {
@@ -178,30 +188,26 @@ pub fn create_output_stream() -> Result<AudioOutputHandle, Box<dyn std::error::E
             )?
         }
         SampleFormat::U16 => {
+            let sample_buffer = sample_buffer.clone();
             device.build_output_stream(
                 &config,
                 move |output: &mut [u16], _: &cpal::OutputCallbackInfo| {
-                    let frame = match rx.try_recv() {
-                        Ok(frame) => frame,
-                        Err(_) => {
-                            // Output silence (32768 is center for U16)
-                            for sample in output.iter_mut() {
-                                *sample = 32768;
-                            }
-                            return;
-                        }
-                    };
+                    let mut buffer = sample_buffer.lock().unwrap();
 
-                    // Convert F32 to U16 and copy
-                    let copy_len = frame.len().min(output.len());
-                    for i in 0..copy_len {
-                        let val = ((frame[i] + 1.0) * 32768.0).clamp(0.0, 65535.0) as u16;
-                        output[i] = val;
+                    // Fill output buffer sample by sample from the VecDeque
+                    let mut filled = 0;
+                    for sample in output.iter_mut() {
+                        if let Some(s) = buffer.pop_front() {
+                            let val = ((s + 1.0) * 32768.0).clamp(0.0, 65535.0) as u16;
+                            *sample = val;
+                            filled += 1;
+                        } else {
+                            *sample = 32768;
+                        }
                     }
 
-                    // Pad with silence
-                    for sample in output[copy_len..].iter_mut() {
-                        *sample = 32768;
+                    if filled < output.len() {
+                        debug!("Output callback: buffer underrun, filled {}/{} samples", filled, output.len());
                     }
                 },
                 move |err| {
@@ -217,19 +223,10 @@ pub fn create_output_stream() -> Result<AudioOutputHandle, Box<dyn std::error::E
 
     // Start the stream
     stream.play()?;
-    debug!("Output stream started");
+    debug!("Output stream started with continuous sample buffer");
 
-    Ok(AudioOutputHandle { stream, sender: tx })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_create_output_stream() {
-        let result = create_output_stream();
-        // Will succeed if system has audio device
-        let _ = result;
-    }
+    Ok(AudioOutputHandle {
+        _stream: stream,
+        sender: tx,
+    })
 }

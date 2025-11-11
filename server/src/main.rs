@@ -16,7 +16,7 @@ type BroadcastSender = broadcast::Sender<BroadcastEvent>;
 enum BroadcastEvent {
     UserJoined { username: String },
     UserLeft { username: String },
-    UserJoinedVoice { username: String, udp_addr: SocketAddr },
+    UserJoinedVoice { username: String },
     UserLeftVoice { username: String },
 }
 
@@ -43,11 +43,6 @@ impl Server {
             users: Arc::new(RwLock::new(HashMap::new())),
             voice_listen_port: 9002, // Default port for voice relay
         }
-    }
-
-    fn with_voice_port(mut self, port: u16) -> Self {
-        self.voice_listen_port = port;
-        self
     }
 
     async fn run(&self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -139,9 +134,7 @@ async fn handle_udp_relay(
                 if authenticated_addrs.contains_key(&src_addr) {
                     // Try to decode as voice packet
                     match VoicePacket::decode(&buf[..n]) {
-                        Ok((packet, _)) => {
-                            debug!("Received voice packet from {}: seq={}, ts={}", src_addr, packet.sequence, packet.timestamp);
-
+                        Ok((_packet, _)) => {
                             // Get all users in voice channel with their UDP addresses
                             let users_lock = users.read().await;
 
@@ -160,7 +153,7 @@ async fn handle_udp_relay(
                             }
                         }
                         Err(e) => {
-                            debug!("Failed to decode voice packet from {}: {}", src_addr, e);
+                            error!("Failed to decode voice packet from {}: {}", src_addr, e);
                         }
                     }
                 } else {
@@ -293,6 +286,7 @@ async fn handle_client(
             .collect();
         let payload = encode_participant_list_with_voice(&participant_infos)?;
         let pkt = TcpPacket::new(PacketTypeId::ServerParticipantList, payload);
+        info!("[{}] Sending participant list to {}: {} users total", peer_addr, username, participant_infos.len());
         socket.write_all(&pkt.encode()?).await?;
         socket.flush().await?;
         debug!("[{}] Sent participant list with voice status ({} users)", peer_addr, participant_infos.len());
@@ -350,8 +344,7 @@ async fn handle_client(
 
                                                 // Broadcast voice join (UDP address will be set on auth)
                                                 let _ = broadcast_tx.send(BroadcastEvent::UserJoinedVoice {
-                                                    username: join_username.clone(),
-                                                    udp_addr: peer_addr,
+                                                    username: join_username.clone()
                                                 });
                                             } else {
                                                 error!("[{}] User {} not found for voice join", peer_addr, join_username);
@@ -415,7 +408,7 @@ async fn handle_client(
                             debug!("[{}] Broadcasted {} left", peer_addr, other_user);
                         }
                     }
-                    Ok(BroadcastEvent::UserJoinedVoice { username: other_user, udp_addr: _ }) => {
+                    Ok(BroadcastEvent::UserJoinedVoice { username: other_user }) => {
                         // Broadcast to all participants so they can update UI and create output streams
                         if other_user != username {
                             let pkt = TcpPacket::new(

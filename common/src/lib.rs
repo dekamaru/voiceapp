@@ -594,17 +594,19 @@ mod tests {
     #[test]
     fn test_packet_type_id_conversions() {
         assert_eq!(PacketTypeId::Login.as_u8(), 0x01);
-        assert_eq!(PacketTypeId::UserJoinedServer.as_u8(), 0x02);
-        assert_eq!(PacketTypeId::JoinVoiceChannel.as_u8(), 0x03);
-        assert_eq!(PacketTypeId::UserJoinedVoice.as_u8(), 0x04);
-        assert_eq!(PacketTypeId::UserLeftVoice.as_u8(), 0x05);
-        assert_eq!(PacketTypeId::UserLeftServer.as_u8(), 0x06);
-        assert_eq!(PacketTypeId::ServerParticipantList.as_u8(), 0x07);
+        assert_eq!(PacketTypeId::LoginResponse.as_u8(), 0x02);
+        assert_eq!(PacketTypeId::UserJoinedServer.as_u8(), 0x03);
+        assert_eq!(PacketTypeId::JoinVoiceChannel.as_u8(), 0x04);
+        assert_eq!(PacketTypeId::UserJoinedVoice.as_u8(), 0x05);
+        assert_eq!(PacketTypeId::UserLeftVoice.as_u8(), 0x06);
+        assert_eq!(PacketTypeId::UserLeftServer.as_u8(), 0x07);
+        assert_eq!(PacketTypeId::ServerParticipantList.as_u8(), 0x08);
 
         assert_eq!(PacketTypeId::from_u8(0x01), Some(PacketTypeId::Login));
-        assert_eq!(PacketTypeId::from_u8(0x05), Some(PacketTypeId::UserLeftVoice));
-        assert_eq!(PacketTypeId::from_u8(0x06), Some(PacketTypeId::UserLeftServer));
-        assert_eq!(PacketTypeId::from_u8(0x07), Some(PacketTypeId::ServerParticipantList));
+        assert_eq!(PacketTypeId::from_u8(0x02), Some(PacketTypeId::LoginResponse));
+        assert_eq!(PacketTypeId::from_u8(0x06), Some(PacketTypeId::UserLeftVoice));
+        assert_eq!(PacketTypeId::from_u8(0x07), Some(PacketTypeId::UserLeftServer));
+        assert_eq!(PacketTypeId::from_u8(0x08), Some(PacketTypeId::ServerParticipantList));
         assert_eq!(PacketTypeId::from_u8(0xFF), None);
     }
 

@@ -1,31 +1,23 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig, SampleRate, SampleFormat};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 const TARGET_SAMPLE_RATE: u32 = 48000;
-const AUDIO_BUFFER_CAPACITY: usize = 4800; // ~100ms at 48kHz
+const AUDIO_BUFFER_CAPACITY: usize = 48000; // ~1000ms at 48kHz - larger buffer to prevent callback blocking
 
 /// Audio frame: mono F32 samples at 48kHz
 pub type AudioFrame = Vec<f32>;
 
 /// Handle to manage audio input stream lifecycle
 pub struct AudioInputHandle {
-    stream: Stream,
+    _stream: Stream, // kept alive to maintain audio stream; dropping it stops the stream
     receiver: Option<mpsc::Receiver<AudioFrame>>,
 }
 
 impl AudioInputHandle {
-    /// Stop the audio stream and drain any remaining frames
-    pub fn stop(self) {
-        drop(self.stream); // dropping stream stops it
-    }
-
-    /// Get mutable receiver to consume audio frames
-    pub fn receiver_mut(&mut self) -> Result<&mut mpsc::Receiver<AudioFrame>, String> {
-        self.receiver.as_mut().ok_or_else(|| "receiver was already taken".to_string())
-    }
-
     /// Extract the receiver from this handle (consuming it)
     pub fn take_receiver(&mut self) -> Result<mpsc::Receiver<AudioFrame>, String> {
         self.receiver.take().ok_or_else(|| "receiver was already taken".to_string())
@@ -135,18 +127,29 @@ pub fn create_input_stream() -> Result<AudioInputHandle, Box<dyn std::error::Err
         config.channels, config.sample_rate.0, format
     );
 
-    let (tx, rx) = mpsc::channel::<AudioFrame>(AUDIO_BUFFER_CAPACITY / 480); // ~10 frames buffer
+    let (tx, rx) = mpsc::channel::<AudioFrame>(AUDIO_BUFFER_CAPACITY / 480); // ~100 frames buffer at 48kHz
+
+    // Track dropped frames to detect callback blockage
+    let dropped_frames = Arc::new(AtomicUsize::new(0));
 
     let channels = config.channels;
 
     // Match on sample format to build the appropriate stream
     let stream = match format {
         SampleFormat::F32 => {
+            let dropped_frames = dropped_frames.clone();
             device.build_input_stream(
                 &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     let mono_samples = stereo_to_mono_f32(data, channels);
-                    let _ = tx.blocking_send(mono_samples);
+                    // Use try_send() to NEVER block the audio callback
+                    // Dropping frames is better than blocking the audio system
+                    if let Err(_) = tx.try_send(mono_samples) {
+                        let dropped = dropped_frames.fetch_add(1, Ordering::Relaxed);
+                        if dropped % 100 == 0 {
+                            warn!("Input buffer full, dropped audio frames (count={})", dropped + 1);
+                        }
+                    }
                 },
                 move |err| {
                     error!("Input stream error: {}", err);
@@ -155,13 +158,20 @@ pub fn create_input_stream() -> Result<AudioInputHandle, Box<dyn std::error::Err
             )?
         }
         SampleFormat::I16 => {
+            let dropped_frames = dropped_frames.clone();
             device.build_input_stream(
                 &config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     // Convert i16 to f32 in [-1.0, 1.0] range
                     let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
                     let mono_samples = stereo_to_mono_f32(&f32_data, channels);
-                    let _ = tx.blocking_send(mono_samples);
+                    // Use try_send() to NEVER block the audio callback
+                    if let Err(_) = tx.try_send(mono_samples) {
+                        let dropped = dropped_frames.fetch_add(1, Ordering::Relaxed);
+                        if dropped % 100 == 0 {
+                            warn!("Input buffer full, dropped audio frames (count={})", dropped + 1);
+                        }
+                    }
                 },
                 move |err| {
                     error!("Input stream error: {}", err);
@@ -170,6 +180,7 @@ pub fn create_input_stream() -> Result<AudioInputHandle, Box<dyn std::error::Err
             )?
         }
         SampleFormat::U16 => {
+            let dropped_frames = dropped_frames.clone();
             device.build_input_stream(
                 &config,
                 move |data: &[u16], _: &cpal::InputCallbackInfo| {
@@ -179,7 +190,13 @@ pub fn create_input_stream() -> Result<AudioInputHandle, Box<dyn std::error::Err
                         .map(|&s| (s as f32 / 32768.0) - 1.0)
                         .collect();
                     let mono_samples = stereo_to_mono_f32(&f32_data, channels);
-                    let _ = tx.blocking_send(mono_samples);
+                    // Use try_send() to NEVER block the audio callback
+                    if let Err(_) = tx.try_send(mono_samples) {
+                        let dropped = dropped_frames.fetch_add(1, Ordering::Relaxed);
+                        if dropped % 100 == 0 {
+                            warn!("Input buffer full, dropped audio frames (count={})", dropped + 1);
+                        }
+                    }
                 },
                 move |err| {
                     error!("Input stream error: {}", err);
@@ -196,7 +213,7 @@ pub fn create_input_stream() -> Result<AudioInputHandle, Box<dyn std::error::Err
     stream.play()?;
     debug!("Input stream started");
 
-    Ok(AudioInputHandle { stream, receiver: Some(rx) })
+    Ok(AudioInputHandle { _stream: stream, receiver: Some(rx) })
 }
 
 #[cfg(test)]

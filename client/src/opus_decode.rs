@@ -37,21 +37,6 @@ impl OpusDecoder {
 
         Ok(pcm_out)
     }
-
-    /// Decode a frame with packet loss concealment for missing packets
-    pub fn decode_frame_with_plc(&mut self) -> Result<Vec<f32>, String> {
-        let mut pcm_out = vec![0.0f32; OPUS_FRAME_SAMPLES];
-
-        let samples_decoded = self.decoder
-            .decode_float(&[], &mut pcm_out, true)
-            .map_err(|e| format!("Failed to decode with PLC: {:?}", e))?;
-
-        pcm_out.truncate(samples_decoded);
-
-        debug!("Decoded with PLC: {} samples", samples_decoded);
-
-        Ok(pcm_out)
-    }
 }
 
 /// Convert mono audio to stereo by duplicating channels
