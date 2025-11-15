@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
-use voiceapp_common::{
+use voiceapp_protocol::{
     parse_packet, PacketId, decode_voice_data, encode_voice_data,
     encode_voice_auth_response,
     requests::decode_voice_auth_request

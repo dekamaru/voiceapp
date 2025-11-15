@@ -1,3 +1,3 @@
 [workspace]
-members = ["common", "client", "server"]
+members = ["protocol", "client", "server", "sdk"]
 resolver = "2"

@@ -1,5 +1,5 @@
 [package]
-name = "voiceapp-server"
+name = "voiceapp-sdk"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,5 +7,4 @@ edition = "2021"
 voiceapp-protocol = { path = "../protocol" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
-tracing-subscriber = "0.3"
-rand = "0.8"
+opus = "0.3"

@@ -5,7 +5,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
-use voiceapp_common::{VoiceData, parse_packet, PacketId, decode_voice_auth_response};
+use voiceapp_protocol::{VoiceData, parse_packet, PacketId, decode_voice_auth_response};
 use std::collections::HashMap;
 use std::sync::Arc;
 use crate::user_voice_stream::UserVoiceStreamManager;
@@ -77,7 +77,7 @@ impl UdpVoiceReceiver {
 
     /// Send a voice packet to the server from the receiver's socket
     pub async fn send_voice_packet(&self, packet: &VoiceData, server_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-        use voiceapp_common::encode_voice_data;
+        use voiceapp_protocol::encode_voice_data;
         let data = encode_voice_data(packet)?;
         self.send_to(&data, server_addr).await
     }
@@ -120,7 +120,7 @@ impl UdpVoiceReceiver {
 
     /// Start receiving voice packets in a background task
     pub fn start_receiving(&self) -> JoinHandle<()> {
-        use voiceapp_common::decode_voice_data;
+        use voiceapp_protocol::decode_voice_data;
         // Clone the Arc types which are Send
         let socket = self.socket.clone();
         let manager = self.manager.clone();

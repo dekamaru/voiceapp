@@ -1,6 +1,6 @@
 use opus::{Channels, Encoder};
 use tracing::debug;
-use voiceapp_common::VoiceData;
+use voiceapp_protocol::VoiceData;
 
 const SAMPLE_RATE: u32 = 48000;
 const OPUS_FRAME_SAMPLES: usize = 960; // 20ms at 48kHz

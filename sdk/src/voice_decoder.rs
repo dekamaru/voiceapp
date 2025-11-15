@@ -5,21 +5,21 @@ const SAMPLE_RATE: u32 = 48000;
 const OPUS_FRAME_SAMPLES: usize = 960; // 20ms at 48kHz
 
 /// Manages Opus decoding of voice packets
-pub struct OpusDecoder {
+pub struct VoiceDecoder {
     decoder: Decoder,
 }
 
-// SAFETY: OpusDecoder can be safely sent between threads because:
+// SAFETY: VoiceDecoder can be safely sent between threads because:
 // 1. The decoder is only accessed through &mut self (not shared)
 // 2. Access is synchronized via RwLock in UserVoiceStreamManager
 // 3. The underlying opus library manages its state correctly
-unsafe impl Send for OpusDecoder {}
+unsafe impl Send for VoiceDecoder {}
 
-impl OpusDecoder {
+impl VoiceDecoder {
     /// Create a new Opus decoder
     pub fn new() -> Result<Self, opus::Error> {
         let decoder = Decoder::new(SAMPLE_RATE, opus::Channels::Mono)?;
-        Ok(OpusDecoder { decoder })
+        Ok(VoiceDecoder { decoder })
     }
 
     /// Decode a single Opus frame to PCM samples

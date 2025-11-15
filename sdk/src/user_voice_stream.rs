@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 use tracing::info;
-use voiceapp_common::VoiceData;
+use voiceapp_protocol::VoiceData;
 
 /// Channel for sending voice packets to a user's stream processor
 pub type VoicePacketSender = mpsc::UnboundedSender<VoiceData>;

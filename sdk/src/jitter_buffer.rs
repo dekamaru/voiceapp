@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use tracing::{debug, warn};
-use voiceapp_common::VoiceData;
+use voiceapp_protocol::VoiceData;
 
 /// Jitter buffer for reordering and buffering voice packets
 /// Handles out-of-order packet arrival and triggers packet loss concealment

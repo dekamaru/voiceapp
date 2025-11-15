@@ -4,7 +4,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, error, info};
-use voiceapp_common::{
+use voiceapp_protocol::{
     parse_packet, PacketId, ParticipantInfo,
     decode_login_request, encode_login_response,
     encode_user_joined_server, encode_user_left_server,

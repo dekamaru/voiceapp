@@ -8,10 +8,8 @@ name = "voiceapp-client"
 path = "src/main.rs"
 
 [dependencies]
-voiceapp-common = { path = "../common" }
+voiceapp-sdk = { path = "../sdk" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 cpal = "0.16"
-opus = "0.3"
-rand = "0.8"
