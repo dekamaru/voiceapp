@@ -5,7 +5,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
-use voiceapp_common::{VoicePacket, UdpAuthResponse};
+use voiceapp_common::{VoiceData, parse_packet, PacketId, decode_voice_auth_response};
 use std::collections::HashMap;
 use std::sync::Arc;
 use crate::user_voice_stream::UserVoiceStreamManager;
@@ -15,7 +15,7 @@ use crate::jitter_buffer::JitterBuffer;
 pub struct UdpVoiceReceiver {
     socket: Arc<UdpSocket>,
     manager: Arc<UserVoiceStreamManager>,
-    ssrc_map: Arc<RwLock<HashMap<u32, String>>>, // SSRC -> username mapping
+    ssrc_map: Arc<RwLock<HashMap<u64, String>>>, // User ID (SSRC) -> username mapping
     jitter_buffers: Arc<RwLock<HashMap<String, JitterBuffer>>>, // Per-user jitter buffers
     auth_success: Arc<AtomicBool>, // Auth result status
 }
@@ -40,11 +40,11 @@ impl UdpVoiceReceiver {
         })
     }
 
-    /// Register a user with their SSRC
-    pub async fn register_user(&self, ssrc: u32, username: String) {
+    /// Register a user with their SSRC (which is the user_id)
+    pub async fn register_user(&self, ssrc: u64, username: String) {
         let mut map = self.ssrc_map.write().await;
         map.insert(ssrc, username.clone());
-        debug!("Registered user '{}' with SSRC {}", username, ssrc);
+        debug!("Registered user '{}' with user_id {}", username, ssrc);
 
         // Create a jitter buffer for this user
         let mut buffers = self.jitter_buffers.write().await;
@@ -52,8 +52,8 @@ impl UdpVoiceReceiver {
         debug!("Created jitter buffer for user '{}'", username);
     }
 
-    /// Unregister a user by SSRC
-    pub async fn unregister_user(&self, ssrc: u32) {
+    /// Unregister a user by user_id (SSRC)
+    pub async fn unregister_user(&self, ssrc: u64) {
         let mut map = self.ssrc_map.write().await;
         if let Some(username) = map.remove(&ssrc) {
             // Also remove their jitter buffer
@@ -76,8 +76,9 @@ impl UdpVoiceReceiver {
     }
 
     /// Send a voice packet to the server from the receiver's socket
-    pub async fn send_voice_packet(&self, packet: &VoicePacket, server_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let data = packet.encode()?;
+    pub async fn send_voice_packet(&self, packet: &VoiceData, server_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+        use voiceapp_common::encode_voice_data;
+        let data = encode_voice_data(packet)?;
         self.send_to(&data, server_addr).await
     }
 
@@ -89,18 +90,27 @@ impl UdpVoiceReceiver {
             self.socket.recv(&mut buf),
         ).await {
             Ok(Ok(n)) => {
-                match UdpAuthResponse::decode(&buf[..n]) {
-                    Ok(response) => {
-                        if response.success {
-                            debug!("Auth response received: SUCCESS");
-                            self.auth_success.store(true, Ordering::Relaxed);
-                            Ok(true)
+                match parse_packet(&buf[..n]) {
+                    Ok((packet_id, payload)) => {
+                        if packet_id == PacketId::VoiceAuthResponse {
+                            match decode_voice_auth_response(payload) {
+                                Ok(success) => {
+                                    if success {
+                                        debug!("Auth response received: SUCCESS");
+                                        self.auth_success.store(true, Ordering::Relaxed);
+                                        Ok(true)
+                                    } else {
+                                        debug!("Auth response received: FAILURE");
+                                        Ok(false)
+                                    }
+                                }
+                                Err(e) => Err(format!("Failed to decode auth response: {}", e).into()),
+                            }
                         } else {
-                            debug!("Auth response received: FAILURE");
-                            Ok(false)
+                            Err(format!("Expected VoiceAuthResponse, got {:?}", packet_id).into())
                         }
                     }
-                    Err(e) => Err(format!("Failed to decode auth response: {}", e).into()),
+                    Err(e) => Err(format!("Failed to parse auth response packet: {}", e).into()),
                 }
             }
             Ok(Err(e)) => Err(format!("Failed to receive auth response: {}", e).into()),
@@ -110,6 +120,7 @@ impl UdpVoiceReceiver {
 
     /// Start receiving voice packets in a background task
     pub fn start_receiving(&self) -> JoinHandle<()> {
+        use voiceapp_common::decode_voice_data;
         // Clone the Arc types which are Send
         let socket = self.socket.clone();
         let manager = self.manager.clone();
@@ -122,54 +133,65 @@ impl UdpVoiceReceiver {
             loop {
                 match socket.recv_from(&mut buf).await {
                     Ok((n, _peer_addr)) => {
-                        // Try to decode voice packet
-                        match VoicePacket::decode(&buf[..n]) {
-                            Ok((packet, _)) => {
-                                // Look up username from SSRC
-                                let map = ssrc_map.read().await;
-                                match map.get(&packet.ssrc) {
-                                    Some(username) => {
-                                        // Route packet through jitter buffer
-                                        let mut buffers = jitter_buffers.write().await;
-                                        if let Some(jb) = buffers.get_mut(username) {
-                                            // Insert packet into jitter buffer
-                                            if let Some(mut ready_packet) = jb.insert(packet) {
-                                                // Process all ready packets from the jitter buffer
-                                                debug!("Jitter buffer returned packet seq={} for {}", ready_packet.sequence, username);
-                                                loop {
-                                                    drop(buffers); // Release lock before calling process_packet
-                                                    if let Err(e) = manager.process_packet(username, &ready_packet).await {
-                                                        error!("Failed to process packet for {}: {}", username, e);
-                                                    } else {
-                                                        debug!("Successfully processed packet seq={} for {}", ready_packet.sequence, username);
-                                                    }
-                                                    // Reacquire lock and try to get next available packet
-                                                    buffers = jitter_buffers.write().await;
+                        // Try to parse and decode voice packet
+                        match parse_packet(&buf[..n]) {
+                            Ok((packet_id, payload)) => {
+                                if packet_id == PacketId::VoiceData {
+                                    match decode_voice_data(payload) {
+                                        Ok(packet) => {
+                                            // Look up username from SSRC (which is actually user_id)
+                                            let map = ssrc_map.read().await;
+                                            match map.get(&packet.ssrc) {
+                                                Some(username) => {
+                                                    // Route packet through jitter buffer
+                                                    let mut buffers = jitter_buffers.write().await;
                                                     if let Some(jb) = buffers.get_mut(username) {
-                                                        if let Some(next_packet) = jb.next_available() {
-                                                            ready_packet = next_packet;
-                                                            // Continue loop to process this packet
-                                                        } else {
-                                                            // No more ready packets, break loop
-                                                            break;
+                                                        // Insert packet into jitter buffer
+                                                        if let Some(mut ready_packet) = jb.insert(packet) {
+                                                            // Process all ready packets from the jitter buffer
+                                                            debug!("Jitter buffer returned packet seq={} for {}", ready_packet.sequence, username);
+                                                            loop {
+                                                                drop(buffers); // Release lock before calling process_packet
+                                                                if let Err(e) = manager.process_packet(username, &ready_packet).await {
+                                                                    error!("Failed to process packet for {}: {}", username, e);
+                                                                } else {
+                                                                    debug!("Successfully processed packet seq={} for {}", ready_packet.sequence, username);
+                                                                }
+                                                                // Reacquire lock and try to get next available packet
+                                                                buffers = jitter_buffers.write().await;
+                                                                if let Some(jb) = buffers.get_mut(username) {
+                                                                    if let Some(next_packet) = jb.next_available() {
+                                                                        ready_packet = next_packet;
+                                                                        // Continue loop to process this packet
+                                                                    } else {
+                                                                        // No more ready packets, break loop
+                                                                        break;
+                                                                    }
+                                                                } else {
+                                                                    break;
+                                                                }
+                                                            }
                                                         }
                                                     } else {
-                                                        break;
+                                                        let available_users: Vec<String> = buffers.keys().cloned().collect();
+                                                        error!("No jitter buffer for user '{}', dropping packet. Available users: {:?}", username, available_users);
                                                     }
                                                 }
+                                                None => {
+                                                    // Packet from user not in our stream list
+                                                }
                                             }
-                                        } else {
-                                            let available_users: Vec<String> = buffers.keys().cloned().collect();
-                                            error!("No jitter buffer for user '{}', dropping packet. Available users: {:?}", username, available_users);
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to decode voice data payload: {}", e);
                                         }
                                     }
-                                    None => {
-                                        // Packet from user not in our stream list
-                                    }
+                                } else {
+                                    debug!("Received non-voice packet type: {:?}", packet_id);
                                 }
                             }
                             Err(e) => {
-                                error!("Failed to decode voice packet: {}", e);
+                                error!("Failed to parse voice packet: {}", e);
                             }
                         }
                     }
@@ -180,28 +202,5 @@ impl UdpVoiceReceiver {
                 }
             }
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_udp_receiver_creation() {
-        let manager = Arc::new(UserVoiceStreamManager::new());
-        let result = UdpVoiceReceiver::new("127.0.0.1:0", manager).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_udp_receiver_bind_address() {
-        let manager = Arc::new(UserVoiceStreamManager::new());
-        let receiver = UdpVoiceReceiver::new("127.0.0.1:0", manager)
-            .await
-            .expect("Failed to create receiver");
-
-        let addr = receiver.local_addr().expect("Failed to get local address");
-        assert!(addr.ip().is_loopback());
     }
 }

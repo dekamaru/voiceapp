@@ -69,18 +69,6 @@ pub fn decode_login_request(data: &[u8]) -> io::Result<String> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid UTF-8"))
 }
 
-/// Decode join voice channel request payload
-/// Format: [token: u64 BE]
-pub fn decode_join_voice_channel_request(data: &[u8]) -> io::Result<u64> {
-    if data.len() < 8 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "token payload too short",
-        ));
-    }
-    Ok(u64::from_be_bytes(data[0..8].try_into().unwrap()))
-}
-
 /// Decode UDP auth request payload
 /// Format: [token: u64 BE]
 pub fn decode_voice_auth_request(data: &[u8]) -> io::Result<u64> {
@@ -114,16 +102,4 @@ pub fn decode_voice_data(data: &[u8]) -> io::Result<VoiceData> {
         ssrc,
         opus_frame,
     })
-}
-
-/// Decode leave voice channel request payload
-/// Format: (empty payload)
-pub fn decode_leave_voice_channel_request(data: &[u8]) -> io::Result<()> {
-    if !data.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "leave voice channel request should have empty payload",
-        ));
-    }
-    Ok(())
 }

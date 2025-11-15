@@ -13,200 +13,161 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn, debug};
-use voiceapp_common::{TcpPacket, PacketTypeId, encode_username, decode_username, decode_participant_list_with_voice, username_to_ssrc, VoicePacket, UdpAuthPacket, decode_voice_token};
+use voiceapp_common::{
+    PacketId, VoiceData,
+    parse_packet, encode_login_request, encode_join_voice_channel_request,
+    encode_leave_voice_channel_request, encode_voice_auth_request,
+    decode_login_response,
+    decode_user_joined_server, decode_user_joined_voice,
+    decode_user_left_voice, decode_user_left_server,
+};
 use audio::AudioInputHandle;
 use voice::VoiceEncoder;
 use user_voice_stream::UserVoiceStreamManager;
 use udp_voice_receiver::UdpVoiceReceiver;
 
-async fn pretty_print_packet(packet: &TcpPacket, voice_state: &VoiceState) {
-    match packet.packet_type {
-        PacketTypeId::Login => {
-            if let Ok(username) = decode_username(&packet.payload) {
-                info!("Server: User logged in: {}", username);
-            }
-        }
-        PacketTypeId::UserJoinedServer => {
-            if let Ok(username) = decode_username(&packet.payload) {
-                info!("Server: User joined server: {}", username);
-            }
-        }
-        PacketTypeId::JoinVoiceChannel => {
-            if let Ok(username) = decode_username(&packet.payload) {
-                info!("Server: User requested to join voice: {}", username);
-            }
-        }
-        PacketTypeId::UserJoinedVoice => {
-            if let Ok(username) = decode_username(&packet.payload) {
-                // Register this user for voice reception
-                let ssrc = username_to_ssrc(&username);
-                voice_state.receiver.register_user(ssrc, username.clone()).await;
+async fn handle_packet(packet_id: PacketId, payload: &[u8], voice_state: &VoiceState) {
+    match packet_id {
+        PacketId::LoginResponse => {
+            match decode_login_response(payload) {
+                Ok(response) => {
+                    // Store the user ID and voice token
+                    let mut user_id_lock = voice_state.user_id.write().await;
+                    *user_id_lock = Some(response.id);
 
-                // Create a channel for receiving voice packets
-                let (tx, rx) = mpsc::unbounded_channel::<VoicePacket>();
-
-                // Register the sender in the manager
-                if let Err(e) = voice_state.manager.register_sender(username.clone(), tx).await {
-                    error!("Failed to register sender for {}: {}", username, e);
-                } else {
-                    // Create output stream for audio playback
-                    if let Ok(output_handle) = output::create_output_stream() {
-                        let audio_sender = output_handle.sender();
-                        let username_clone = username.clone();
-
-                        // Store the handle in VoiceState so it stays alive for the entire session
-                        let mut outputs = voice_state.audio_outputs.write().await;
-                        outputs.insert(username.clone(), output_handle);
-                        drop(outputs);
-
-                        // Spawn a task to process voice packets: decode and play audio
-                        tokio::spawn(async move {
-                            let mut rx = rx;
-                            while let Some(packet) = rx.recv().await {
-                                // Decode Opus frame to mono F32
-                                match opus_decode::OpusDecoder::new() {
-                                    Ok(mut decoder) => {
-                                        match decoder.decode_frame(&packet.opus_frame) {
-                                            Ok(mono_samples) => {
-                                                // Convert mono to stereo for playback
-                                                let stereo_samples = opus_decode::mono_to_stereo(&mono_samples);
-
-                                                // Send to audio output
-                                                if let Err(e) = audio_sender.send(stereo_samples) {
-                                                    error!("Failed to queue audio for {}: {}", username_clone, e);
-                                                }
-                                            }
-                                            Err(e) => {
-                                                error!("Failed to decode audio for {}: {}", username_clone, e);
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to create decoder for {}: {}", username_clone, e);
-                                        break;
-                                    }
-                                }
-                            }
-                            debug!("Voice playback for {} closed", username_clone);
-                        });
-                        debug!("Created voice playback for {}", username);
-                    } else {
-                        error!("Failed to create output stream for {}", username);
-                    }
-                }
-
-                info!("User joined voice channel: {} (SSRC: {})", username, ssrc);
-            }
-        }
-        PacketTypeId::UserLeftVoice => {
-            if let Ok(username) = decode_username(&packet.payload) {
-                // Unregister this user from voice reception
-                let ssrc = username_to_ssrc(&username);
-                voice_state.receiver.unregister_user(ssrc).await;
-
-                // Unregister from packet sender (will close the channel)
-                if let Err(e) = voice_state.manager.unregister_sender(&username).await {
-                    warn!("Failed to unregister sender for {}: {}", username, e);
-                }
-
-                // Remove the audio output handle (will stop the audio stream)
-                let mut outputs = voice_state.audio_outputs.write().await;
-                outputs.remove(&username);
-                drop(outputs);
-
-                info!("User left voice channel: {} (SSRC: {})", username, ssrc);
-            }
-        }
-        PacketTypeId::UserLeftServer => {
-            if let Ok(username) = decode_username(&packet.payload) {
-                info!("User left server: {}", username);
-            }
-        }
-        PacketTypeId::LoginResponse => {
-            match decode_voice_token(&packet.payload) {
-                Ok(token) => {
-                    // Store the token for UDP voice authentication
                     let mut token_lock = voice_state.voice_token.write().await;
-                    *token_lock = Some(token);
-                    debug!("UDP voice token received in LoginResponse: {}", token);
-                    info!("Successfully logged in with UDP voice token");
-                }
-                Err(e) => {
-                    error!("Failed to decode UDP voice token from LoginResponse: {}", e);
-                }
-            }
-        }
-        PacketTypeId::ServerParticipantList => {
-            match decode_participant_list_with_voice(&packet.payload) {
-                Ok(participants) => {
-                    info!("Server participant list: {} users", participants.len());
-                    for participant in participants.iter() {
+                    *token_lock = Some(response.voice_token);
+
+                    debug!("UDP voice token received in LoginResponse: {}", response.voice_token);
+                    info!("Successfully logged in with user_id={} and UDP voice token", response.id);
+
+                    // Register all participants currently in voice channel
+                    for participant in response.participants.iter() {
                         if participant.in_voice {
-                            // Register voice users
-                            let ssrc = username_to_ssrc(&participant.username);
-                            voice_state.receiver.register_user(ssrc, participant.username.clone()).await;
-
-                            // Register voice packet senders for users already in voice
-                            let (tx, rx) = mpsc::unbounded_channel::<VoicePacket>();
-                            if let Err(e) = voice_state.manager.register_sender(participant.username.clone(), tx).await {
-                                error!("Failed to register sender for {}: {}", participant.username, e);
-                            } else {
-                                // Create output stream for audio playback
-                                if let Ok(output_handle) = output::create_output_stream() {
-                                    let audio_sender = output_handle.sender();
-                                    let username = participant.username.clone();
-
-                                    // Store the handle in VoiceState so it stays alive for the entire session
-                                    let mut outputs = voice_state.audio_outputs.write().await;
-                                    outputs.insert(participant.username.clone(), output_handle);
-                                    drop(outputs);
-
-                                    // Spawn a task to process voice packets: decode and play audio
-                                    tokio::spawn(async move {
-                                        let mut rx = rx;
-                                        while let Some(packet) = rx.recv().await {
-                                            // Decode Opus frame to mono F32
-                                            match opus_decode::OpusDecoder::new() {
-                                                Ok(mut decoder) => {
-                                                    match decoder.decode_frame(&packet.opus_frame) {
-                                                        Ok(mono_samples) => {
-                                                            // Convert mono to stereo for playback
-                                                            let stereo_samples = opus_decode::mono_to_stereo(&mono_samples);
-
-                                                            // Send to audio output
-                                                            if let Err(e) = audio_sender.send(stereo_samples) {
-                                                                error!("Failed to queue audio for {}: {}", username, e);
-                                                            }
-                                                        }
-                                                        Err(e) => {
-                                                            error!("Failed to decode audio for {}: {}", username, e);
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    error!("Failed to create decoder for {}: {}", username, e);
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        debug!("Voice playback for {} closed", username);
-                                    });
-                                    debug!("Registered voice playback for {} (from participant list)", participant.username);
-                                } else {
-                                    error!("Failed to create output stream for {}", participant.username);
-                                }
-                            }
-
-                            debug!("  {} [IN_VOICE] - SSRC: {}", participant.username, ssrc);
-                        } else {
-                            debug!("  {}", participant.username);
+                            // Use user_id as SSRC
+                            voice_state.receiver.register_user(participant.user_id, format!("user_{}", participant.user_id)).await;
+                            debug!("Registered user {} in voice channel", participant.user_id);
                         }
                     }
                 }
                 Err(e) => {
-                    error!("Failed to decode participant list: {}", e);
+                    error!("Failed to decode login response: {}", e);
                 }
             }
+        }
+        PacketId::UserJoinedServer => {
+            match decode_user_joined_server(payload) {
+                Ok((user_id, username)) => {
+                    info!("User joined server: {} (ID: {})", username, user_id);
+                }
+                Err(e) => {
+                    error!("Failed to decode user joined server event: {}", e);
+                }
+            }
+        }
+        PacketId::UserJoinedVoice => {
+            match decode_user_joined_voice(payload) {
+                Ok(user_id) => {
+                    // Register this user for voice reception (use user_id as SSRC)
+                    voice_state.receiver.register_user(user_id, format!("user_{}", user_id)).await;
+
+                    // Create a channel for receiving voice packets
+                    let (tx, rx) = mpsc::unbounded_channel::<VoiceData>();
+
+                    let username = format!("user_{}", user_id);
+                    // Register the sender in the manager
+                    if let Err(e) = voice_state.manager.register_sender(username.clone(), tx).await {
+                        error!("Failed to register sender for user {}: {}", user_id, e);
+                    } else {
+                        // Create output stream for audio playback
+                        if let Ok(output_handle) = output::create_output_stream() {
+                            let audio_sender = output_handle.sender();
+                            let username_clone = username.clone();
+
+                            // Store the handle in VoiceState so it stays alive for the entire session
+                            let mut outputs = voice_state.audio_outputs.write().await;
+                            outputs.insert(username.clone(), output_handle);
+                            drop(outputs);
+
+                            // Spawn a task to process voice packets: decode and play audio
+                            tokio::spawn(async move {
+                                let mut rx = rx;
+                                while let Some(packet) = rx.recv().await {
+                                    // Decode Opus frame to mono F32
+                                    match opus_decode::OpusDecoder::new() {
+                                        Ok(mut decoder) => {
+                                            match decoder.decode_frame(&packet.opus_frame) {
+                                                Ok(mono_samples) => {
+                                                    // Convert mono to stereo for playback
+                                                    let stereo_samples = opus_decode::mono_to_stereo(&mono_samples);
+
+                                                    // Send to audio output
+                                                    if let Err(e) = audio_sender.send(stereo_samples) {
+                                                        error!("Failed to queue audio for {}: {}", username_clone, e);
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    error!("Failed to decode audio for {}: {}", username_clone, e);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to create decoder for {}: {}", username_clone, e);
+                                            break;
+                                        }
+                                    }
+                                }
+                                debug!("Voice playback for {} closed", username_clone);
+                            });
+                            debug!("Created voice playback for {}", username);
+                        } else {
+                            error!("Failed to create output stream for user {}", user_id);
+                        }
+                    }
+
+                    info!("User joined voice channel: user_id={} (SSRC: {})", user_id, user_id);
+                }
+                Err(e) => {
+                    error!("Failed to decode user joined voice event: {}", e);
+                }
+            }
+        }
+        PacketId::UserLeftVoice => {
+            match decode_user_left_voice(payload) {
+                Ok(user_id) => {
+                    // Unregister this user from voice reception
+                    voice_state.receiver.unregister_user(user_id).await;
+
+                    let username = format!("user_{}", user_id);
+                    // Unregister from packet sender (will close the channel)
+                    if let Err(e) = voice_state.manager.unregister_sender(&username).await {
+                        warn!("Failed to unregister sender for user {}: {}", user_id, e);
+                    }
+
+                    // Remove the audio output handle (will stop the audio stream)
+                    let mut outputs = voice_state.audio_outputs.write().await;
+                    outputs.remove(&username);
+                    drop(outputs);
+
+                    info!("User left voice channel: user_id={} (SSRC: {})", user_id, user_id);
+                }
+                Err(e) => {
+                    error!("Failed to decode user left voice event: {}", e);
+                }
+            }
+        }
+        PacketId::UserLeftServer => {
+            match decode_user_left_server(payload) {
+                Ok(user_id) => {
+                    info!("User left server: {}", user_id);
+                }
+                Err(e) => {
+                    error!("Failed to decode user left server event: {}", e);
+                }
+            }
+        }
+        _ => {
+            debug!("Received unhandled packet type: {:?}", packet_id);
         }
     }
 }
@@ -250,6 +211,8 @@ struct VoiceState {
     audio_outputs: Arc<RwLock<std::collections::HashMap<String, output::AudioOutputHandle>>>,
     // Token for UDP voice authentication
     voice_token: Arc<RwLock<Option<u64>>>,
+    // User ID assigned by the server
+    user_id: Arc<RwLock<Option<u64>>>,
 }
 
 impl VoiceState {
@@ -265,6 +228,7 @@ impl VoiceState {
             receiver,
             audio_outputs: Arc::new(RwLock::new(std::collections::HashMap::new())),
             voice_token: Arc::new(RwLock::new(None)),
+            user_id: Arc::new(RwLock::new(None)),
         })
     }
 }
@@ -274,8 +238,8 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
     info!("Connected to server at {}", server_addr);
 
     // Send Login packet
-    let login_packet = TcpPacket::new(PacketTypeId::Login, encode_username(username));
-    socket.write_all(&login_packet.encode()?).await?;
+    let login_packet = encode_login_request(username)?;
+    socket.write_all(&login_packet).await?;
     socket.flush().await?;
     info!("Sent login packet for user '{}'", username);
 
@@ -314,8 +278,8 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
                                 warn!("User already in voice channel");
                             } else {
                                 // First, request to join voice channel
-                                let pkt = TcpPacket::new(PacketTypeId::JoinVoiceChannel, vec![]);
-                                match socket.write_all(&pkt.encode()?).await {
+                                let pkt = encode_join_voice_channel_request()?;
+                                match socket.write_all(&pkt).await {
                                     Ok(_) => {
                                         socket.flush().await?;
                                         info!("Sent join voice channel request");
@@ -323,8 +287,20 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
                                         // Start audio input stream
                                         match audio::create_input_stream() {
                                             Ok(mut audio_handle) => {
-                                                // Create voice encoder
-                                                match VoiceEncoder::new(username.to_string()) {
+                                                // Create voice encoder with user_id
+                                                let user_id_val = {
+                                                    let id_lock = voice_state.user_id.read().await;
+                                                    id_lock.clone()
+                                                };
+
+                                                if user_id_val.is_none() {
+                                                    error!("User ID not available - not logged in yet");
+                                                    audio_state = AudioState::Idle;
+                                                    continue;
+                                                }
+
+                                                // Create voice encoder with user_id as username for now
+                                                match VoiceEncoder::new(user_id_val.unwrap()) {
                                                     Ok(mut encoder) => {
                                                         // Get the token received during login
                                                         let token = {
@@ -341,8 +317,7 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
                                                             let mut auth_success = false;
 
                                                             for attempt in 1..=max_attempts {
-                                                                let auth_packet = UdpAuthPacket::new(token);
-                                                                match auth_packet.encode() {
+                                                                match encode_voice_auth_request(token) {
                                                                     Ok(auth_data) => {
                                                                         // Send from receiver socket so server knows to send packets back to receiver port
                                                                         if let Err(e) = voice_state.receiver.send_to(&auth_data, &server_voice_addr).await {
@@ -453,8 +428,8 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
                                 audio_state = AudioState::Idle;
 
                                 // Send leave packet
-                                let pkt = TcpPacket::new(PacketTypeId::UserLeftVoice, vec![]);
-                                match socket.write_all(&pkt.encode()?).await {
+                                let pkt = encode_leave_voice_channel_request()?;
+                                match socket.write_all(&pkt).await {
                                     Ok(_) => {
                                         socket.flush().await?;
                                         info!("Left voice channel and stopped recording audio");
@@ -482,9 +457,9 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
                         break;
                     }
                     Ok(n) => {
-                        match TcpPacket::decode(&buf[..n]) {
-                            Ok((packet, _bytes_read)) => {
-                                pretty_print_packet(&packet, &voice_state).await;
+                        match parse_packet(&buf[..n]) {
+                            Ok((packet_id, payload)) => {
+                                handle_packet(packet_id, payload, &voice_state).await;
                             }
                             Err(e) => {
                                 error!("Failed to decode packet: {}", e);

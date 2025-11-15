@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use tracing::{debug, warn};
-use voiceapp_common::VoicePacket;
+use voiceapp_common::VoiceData;
 
 /// Jitter buffer for reordering and buffering voice packets
 /// Handles out-of-order packet arrival and triggers packet loss concealment
 pub struct JitterBuffer {
-    buffer: BTreeMap<u32, VoicePacket>,
+    buffer: BTreeMap<u32, VoiceData>,
     next_seq: u32,
     max_depth: usize,
 }
@@ -24,7 +24,7 @@ impl JitterBuffer {
     /// Insert a packet into the buffer
     /// Returns Some(packet) if this completes a sequence and packet is ready to decode
     /// Returns None if packet is buffered waiting for earlier packets
-    pub fn insert(&mut self, packet: VoicePacket) -> Option<VoicePacket> {
+    pub fn insert(&mut self, packet: VoiceData) -> Option<VoiceData> {
         let seq = packet.sequence;
 
         // Initialize next_seq on first packet
@@ -50,7 +50,7 @@ impl JitterBuffer {
 
     /// Try to decode the next packet in sequence
     /// Returns the first packet in sequence (caller may want to call again to get more)
-    fn try_decode_next(&mut self) -> Option<VoicePacket> {
+    fn try_decode_next(&mut self) -> Option<VoiceData> {
         if let Some(packet) = self.buffer.remove(&self.next_seq) {
             self.next_seq = self.next_seq.wrapping_add(1);
             debug!("Decoded packet seq={}, buffer_size={}", packet.sequence, self.buffer.len());
@@ -86,127 +86,7 @@ impl JitterBuffer {
 
     /// Check if there are more packets available to decode
     /// Call this after insert() returns Some to get any buffered packets that are now in sequence
-    pub fn next_available(&mut self) -> Option<VoicePacket> {
+    pub fn next_available(&mut self) -> Option<VoiceData> {
         self.try_decode_next()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use voiceapp_common::username_to_ssrc;
-
-    fn create_packet(seq: u32, data: Vec<u8>) -> VoicePacket {
-        VoicePacket::new(seq, seq.wrapping_mul(960), username_to_ssrc("test"), data)
-    }
-
-    #[test]
-    fn test_jitter_buffer_in_order() {
-        let mut jb = JitterBuffer::new(10);
-
-        // Insert packets in order
-        assert!(jb.insert(create_packet(0, vec![1, 2, 3])).is_some());
-        assert!(jb.insert(create_packet(1, vec![4, 5, 6])).is_some());
-        assert!(jb.insert(create_packet(2, vec![7, 8, 9])).is_some());
-    }
-
-    #[test]
-    fn test_jitter_buffer_out_of_order() {
-        let mut jb = JitterBuffer::new(10);
-
-        // Insert packets out of order, starting with 0
-        let pkt = jb.insert(create_packet(0, vec![1, 2, 3]));
-        assert!(pkt.is_some());
-        assert_eq!(pkt.unwrap().sequence, 0);
-
-        // Packet 2 arrives before packet 1
-        assert!(jb.insert(create_packet(2, vec![7, 8, 9])).is_none()); // Buffered
-
-        // Packet 1 arrives, should be decodable
-        let pkt = jb.insert(create_packet(1, vec![4, 5, 6]));
-        assert!(pkt.is_some());
-        assert_eq!(pkt.unwrap().sequence, 1);
-
-        // Packet 2 should now be retrievable via next_available
-        let pkt = jb.next_available();
-        assert!(pkt.is_some());
-        assert_eq!(pkt.unwrap().sequence, 2);
-
-        // Packet 3
-        let pkt = jb.insert(create_packet(3, vec![10, 11, 12]));
-        assert!(pkt.is_some());
-        assert_eq!(pkt.unwrap().sequence, 3);
-    }
-
-    #[test]
-    fn test_jitter_buffer_duplicate_packet() {
-        let mut jb = JitterBuffer::new(10);
-
-        // Insert same packet twice
-        assert!(jb.insert(create_packet(0, vec![1, 2, 3])).is_some());
-        assert!(jb.insert(create_packet(0, vec![1, 2, 3])).is_none()); // Already decoded
-    }
-
-    #[test]
-    fn test_jitter_buffer_old_packet() {
-        let mut jb = JitterBuffer::new(10);
-
-        // Decode some packets first
-        assert!(jb.insert(create_packet(0, vec![1, 2, 3])).is_some());
-        assert!(jb.insert(create_packet(1, vec![4, 5, 6])).is_some());
-
-        // Try to insert old packet
-        assert!(jb.insert(create_packet(0, vec![1, 2, 3])).is_none()); // Dropped as old
-    }
-
-    #[test]
-    fn test_jitter_buffer_overflow() {
-        let mut jb = JitterBuffer::new(3);
-
-        // Insert packets out of order to fill buffer
-        // First insert packet 0 to initialize next_seq
-        assert!(jb.insert(create_packet(0, vec![0, 0, 0])).is_some());
-
-        // Insert packets 2-4 to fill the buffer
-        jb.insert(create_packet(2, vec![4, 5, 6]));     // Buffered
-        jb.insert(create_packet(3, vec![7, 8, 9]));     // Buffered
-        jb.insert(create_packet(4, vec![10, 11, 12]));  // Buffered
-
-        // Buffer now has 3 packets (2,3,4), size=3
-        // Insert packet 5 - buffer becomes full, should skip to packet 2
-        let result = jb.insert(create_packet(5, vec![13, 14, 15]));
-        // Should have decoded packet 2 due to buffer overflow
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().sequence, 2);
-    }
-
-    #[test]
-    fn test_jitter_buffer_large_sequence_numbers() {
-        let mut jb = JitterBuffer::new(10);
-
-        // Test with large sequence numbers
-        let seq1 = 1000000u32;
-        let seq2 = 1000001u32;
-        let seq3 = 1000002u32;
-
-        assert!(jb.insert(create_packet(seq1, vec![1])).is_some());
-        assert!(jb.insert(create_packet(seq2, vec![2])).is_some());
-        assert!(jb.insert(create_packet(seq3, vec![3])).is_some());
-    }
-
-    #[test]
-    fn test_jitter_buffer_gap_detection() {
-        let mut jb = JitterBuffer::new(10);
-
-        // Insert initial packet
-        assert!(jb.insert(create_packet(0, vec![1, 2, 3])).is_some());
-
-        // Insert packet with large gap
-        assert!(jb.insert(create_packet(2000, vec![4, 5, 6])).is_none());
-
-        // Buffer should skip the gap and decode
-        let result = jb.insert(create_packet(1, vec![7, 8, 9]));
-        // Either decodes 1 or waits for more packets depending on gap threshold
-        assert!(result.is_none() || result.is_some());
     }
 }

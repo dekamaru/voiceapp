@@ -7,7 +7,6 @@ use tracing::{debug, error, info};
 use voiceapp_common::{
     parse_packet, PacketId, ParticipantInfo,
     decode_login_request, encode_login_response,
-    decode_join_voice_channel_request, decode_leave_voice_channel_request,
     encode_user_joined_server, encode_user_left_server,
     encode_user_joined_voice, encode_user_left_voice,
 };
@@ -77,9 +76,8 @@ impl ManagementServer {
 
         loop {
             let (socket, peer_addr) = listener.accept().await?;
-            info!("[{}] New connection", peer_addr);
-
             let management = self.clone();
+
             tokio::spawn(async move {
                 if let Err(e) = management.handle_client(socket, peer_addr).await {
                     error!("[{}] Error: {}", peer_addr, e);
@@ -160,12 +158,12 @@ impl ManagementServer {
                         }
                     }
                     PacketId::JoinVoiceChannelRequest => {
-                        if let Err(e) = self.handle_join_voice_channel_request(peer_addr, &payload).await {
+                        if let Err(e) = self.handle_join_voice_channel_request(peer_addr).await {
                             error!("[{}] Failed to handle join voice channel request: {}", peer_addr, e);
                         }
                     }
                     PacketId::LeaveVoiceChannelRequest => {
-                        if let Err(e) = self.handle_leave_voice_channel_request(peer_addr, &payload).await {
+                        if let Err(e) = self.handle_leave_voice_channel_request(peer_addr).await {
                             error!("[{}] Failed to handle leave voice channel request: {}", peer_addr, e);
                         }
                     }
@@ -271,14 +269,7 @@ impl ManagementServer {
     }
 
     /// Handle join voice channel request: update user voice state and broadcast event
-    async fn handle_join_voice_channel_request(
-        &self,
-        peer_addr: SocketAddr,
-        payload: &[u8],
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // Decode the voice token from the request
-        let _voice_token = decode_join_voice_channel_request(payload)?;
-
+    async fn handle_join_voice_channel_request(&self, peer_addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         // Get user ID and update in_voice state
         let user_id = {
             let mut users_lock = self.users.write().await;
@@ -306,14 +297,7 @@ impl ManagementServer {
     }
 
     /// Handle leave voice channel request: update user voice state and broadcast event
-    async fn handle_leave_voice_channel_request(
-        &self,
-        peer_addr: SocketAddr,
-        payload: &[u8],
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // Decode the leave request
-        decode_leave_voice_channel_request(payload)?;
-
+    async fn handle_leave_voice_channel_request(&self, peer_addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         // Get user ID and update in_voice state
         let user_id = {
             let mut users_lock = self.users.write().await;

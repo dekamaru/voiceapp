@@ -11,14 +11,14 @@ pub use responses::LoginResponse;
 // Re-export encode/decode functions for convenience
 pub use requests::{
     decode_login_request, encode_login_request,
-    decode_join_voice_channel_request, encode_join_voice_channel_request,
+    encode_join_voice_channel_request,
     decode_voice_data, encode_voice_data,
     decode_voice_auth_request, encode_voice_auth_request,
-    decode_leave_voice_channel_request, encode_leave_voice_channel_request,
+    encode_leave_voice_channel_request,
 };
 pub use responses::{
     decode_login_response, encode_login_response,
-    encode_voice_auth_response,
+    encode_voice_auth_response, decode_voice_auth_response,
 };
 pub use events::{
     encode_user_joined_server, decode_user_joined_server,

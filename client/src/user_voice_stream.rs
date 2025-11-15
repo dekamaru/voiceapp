@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 use tracing::info;
-use voiceapp_common::VoicePacket;
+use voiceapp_common::VoiceData;
 
 /// Channel for sending voice packets to a user's stream processor
-pub type VoicePacketSender = mpsc::UnboundedSender<VoicePacket>;
+pub type VoicePacketSender = mpsc::UnboundedSender<VoiceData>;
 
 /// Manages voice packet routing for all connected remote users
 pub struct UserVoiceStreamManager {
@@ -48,7 +48,7 @@ impl UserVoiceStreamManager {
     }
 
     /// Send a voice packet to a specific user (non-blocking)
-    pub async fn process_packet(&self, username: &str, packet: &VoicePacket) -> Result<(), String> {
+    pub async fn process_packet(&self, username: &str, packet: &VoiceData) -> Result<(), String> {
         let senders = self.senders.read().await;
 
         let sender = senders
