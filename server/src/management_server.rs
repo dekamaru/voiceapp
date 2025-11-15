@@ -4,52 +4,69 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, error, info};
-use voiceapp_common::{TcpPacket, PacketTypeId, encode_username, decode_username, encode_participant_list_with_voice, ParticipantInfo, encode_voice_token};
-use rand::Rng;
+use voiceapp_common::{
+    parse_packet, PacketId, ParticipantInfo,
+    decode_login_request, encode_login_response,
+    decode_join_voice_channel_request, decode_leave_voice_channel_request,
+    encode_user_joined_server, encode_user_left_server,
+    encode_user_joined_voice, encode_user_left_voice,
+};
 use std::collections::HashMap;
+use rand::random;
 
-const MAX_BUFFER_SIZE: usize = 65536; // Prevent memory exhaustion attacks
-
+/// Broadcast message sent to all connected clients
 #[derive(Clone, Debug)]
-pub enum BroadcastEvent {
-    UserJoined { username: String },
-    UserLeft { username: String },
-    UserJoinedVoice { username: String },
-    UserLeftVoice { username: String },
+pub struct BroadcastMessage {
+    pub sender_addr: Option<SocketAddr>, // None means server broadcast (all receive)
+    pub for_all: bool,                    // If true, include sender; if false, exclude sender
+    pub packet_data: Vec<u8>,             // Complete encoded packet to forward
 }
 
 /// Represents a connected user with their voice channel status and authentication token
 #[derive(Clone, Debug)]
 pub struct User {
+    pub id: u64,
     pub username: String,
     pub in_voice: bool,
     pub token: u64, // Authentication token for UDP connections
 }
 
-type BroadcastSender = broadcast::Sender<BroadcastEvent>;
 
 /// ManagementServer handles TCP connections, user login, presence management,
 /// and broadcasts events to all connected clients
 #[derive(Clone)]
 pub struct ManagementServer {
-    pub broadcast_tx: Arc<BroadcastSender>,
     pub users: Arc<RwLock<HashMap<SocketAddr, User>>>,
+    next_user_id: Arc<RwLock<u64>>,
+    broadcast_tx: Arc<broadcast::Sender<BroadcastMessage>>,
+    disconnect_tx: Arc<broadcast::Sender<u64>>,
 }
 
 impl ManagementServer {
     pub fn new() -> Self {
-        let (tx, _rx) = broadcast::channel(100);
+        let (broadcast_tx, _) = broadcast::channel(100);
+        let (disconnect_tx, _) = broadcast::channel(100);
 
         ManagementServer {
-            broadcast_tx: Arc::new(tx),
             users: Arc::new(RwLock::new(HashMap::new())),
+            next_user_id: Arc::new(RwLock::new(1)),
+            broadcast_tx: Arc::new(broadcast_tx),
+            disconnect_tx: Arc::new(disconnect_tx),
         }
     }
 
-    /// Check if a token is valid (belongs to any logged-in user)
-    pub async fn is_token_valid(&self, token: u64) -> bool {
+    /// Get user ID by token, returns None if token is invalid
+    pub async fn get_user_id_by_token(&self, token: u64) -> Option<u64> {
         let users_lock = self.users.read().await;
-        users_lock.values().any(|user| user.token == token)
+        users_lock
+            .values()
+            .find(|user| user.token == token)
+            .map(|user| user.id)
+    }
+
+    /// Get a receiver for disconnect events (broadcasts user_id when user disconnects)
+    pub fn get_disconnect_rx(&self) -> broadcast::Receiver<u64> {
+        self.disconnect_tx.subscribe()
     }
 
     /// Start the TCP listener and accept client connections
@@ -77,240 +94,294 @@ impl ManagementServer {
         mut socket: TcpStream,
         peer_addr: SocketAddr,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut buffer = Vec::new();
         let mut read_buf = vec![0u8; 4096];
-
-        // === LOGIN PHASE ===
-        // Accumulate data until we have a complete Login packet
-        let username = loop {
-            match TcpPacket::decode(&buffer) {
-                Ok((packet, bytes_read)) => {
-                    if packet.packet_type != PacketTypeId::Login {
-                        error!("[{}] Expected Login, got {:?}", peer_addr, packet.packet_type);
-                        return Err("Expected Login packet".into());
-                    }
-
-                    let username = decode_username(&packet.payload)?;
-                    Self::validate_username(&username)?;
-                    info!("[{}] {} logged in", peer_addr, username);
-
-                    buffer.drain(0..bytes_read);
-                    break username;
-                }
-                Err(_) => {
-                    // Need more data
-                    if buffer.len() > MAX_BUFFER_SIZE {
-                        return Err("Buffer overflow during login".into());
-                    }
-
-                    let n = socket.read(&mut read_buf).await?;
-                    if n == 0 {
-                        debug!("[{}] Disconnected before login", peer_addr);
-                        return Ok(());
-                    }
-                    buffer.extend_from_slice(&read_buf[..n]);
-                }
-            }
-        };
-
-        // Add user to users HashMap with random token
-        let token = {
-            let mut rng = rand::thread_rng();
-            rng.gen::<u64>()
-        };
-        {
-            let mut lock = self.users.write().await;
-            lock.insert(peer_addr, User {
-                username: username.clone(),
-                in_voice: false,
-                token,
-            });
-        }
-
-        // Send LoginResponse with the token
-        {
-            let token_payload = encode_voice_token(token)?;
-            let login_response = TcpPacket::new(PacketTypeId::LoginResponse, token_payload);
-            socket.write_all(&login_response.encode()?).await?;
-            socket.flush().await?;
-            debug!("[{}] Sent LoginResponse with UDP voice token to {}", peer_addr, username);
-        }
-
-        // Send ServerParticipantList with voice status to the new user
-        {
-            let users_lock = self.users.read().await;
-            let participant_infos: Vec<ParticipantInfo> = users_lock
-                .values()
-                .map(|user| {
-                    ParticipantInfo {
-                        username: user.username.clone(),
-                        in_voice: user.in_voice,
-                    }
-                })
-                .collect();
-            let payload = encode_participant_list_with_voice(&participant_infos)?;
-            let pkt = TcpPacket::new(PacketTypeId::ServerParticipantList, payload);
-            info!("[{}] Sending participant list to {}: {} users total", peer_addr, username, participant_infos.len());
-            socket.write_all(&pkt.encode()?).await?;
-            socket.flush().await?;
-            debug!("[{}] Sent participant list with voice status ({} users)", peer_addr, participant_infos.len());
-        }
-
-        // Broadcast user joined
-        let _ = self.broadcast_tx.send(BroadcastEvent::UserJoined { username: username.clone() });
-
-        // === CLIENT LOOP PHASE ===
         let mut broadcast_rx = self.broadcast_tx.subscribe();
 
         loop {
             tokio::select! {
-                result = socket.read(&mut read_buf) => {
-                    match result {
-                        Ok(0) => {
-                            info!("[{}] {} disconnected", peer_addr, username);
-                            self.remove_participant(peer_addr, &username).await;
-                            break;
-                        }
+                // Handle incoming packets from the client
+                read_result = socket.read(&mut read_buf) => {
+                    match read_result {
                         Ok(n) => {
-                            buffer.extend_from_slice(&read_buf[..n]);
-
-                            // Check for buffer overflow
-                            if buffer.len() > MAX_BUFFER_SIZE {
-                                error!("[{}] Buffer overflow", peer_addr);
-                                self.remove_participant(peer_addr, &username).await;
-                                return Err("Buffer overflow".into());
+                            if n == 0 {
+                                // User disconnected, clean up and exit
+                                self.handle_user_disconnect(peer_addr).await;
+                                return Ok(());
                             }
 
-                            // Try to parse packets from buffer
-                            while let Ok((packet, bytes_read)) = TcpPacket::decode(&buffer) {
-                                match packet.packet_type {
-                                    PacketTypeId::JoinVoiceChannel => {
-                                        // No payload needed - server knows which user is on this connection
-                                        debug!("[{}] {} requesting to join voice channel", peer_addr, username);
-
-                                        // Update user's voice status
-                                        let mut users_lock = self.users.write().await;
-                                        if let Some(user) = users_lock.get_mut(&peer_addr) {
-                                            user.in_voice = true;
-                                        }
-                                        drop(users_lock);
-
-                                        debug!("[{}] {} joined voice channel", peer_addr, username);
-
-                                        // Broadcast voice join
-                                        let _ = self.broadcast_tx.send(BroadcastEvent::UserJoinedVoice {
-                                            username: username.clone()
-                                        });
-                                    }
-                                    PacketTypeId::UserLeftVoice => {
-                                        debug!("[{}] {} leaving voice channel", peer_addr, username);
-
-                                        // Update user's voice status
-                                        let mut users_lock = self.users.write().await;
-                                        if let Some(user) = users_lock.get_mut(&peer_addr) {
-                                            user.in_voice = false;
-                                        }
-                                        drop(users_lock);
-
-                                        let _ = self.broadcast_tx.send(BroadcastEvent::UserLeftVoice {
-                                            username: username.clone()
-                                        });
-                                    }
-                                    _ => {
-                                        debug!("[{}] Ignoring packet type {:?}", peer_addr, packet.packet_type);
-                                    }
-                                }
-                                buffer.drain(0..bytes_read);
+                            if let Err(e) = self.handle_incoming_request(&mut socket, peer_addr, &read_buf).await {
+                                error!("[{}] Error handling incoming request: {}", peer_addr, e);
                             }
                         }
                         Err(e) => {
-                            error!("[{}] Read error: {}", peer_addr, e);
-                            self.remove_participant(peer_addr, &username).await;
-                            return Err(e.into());
+                            error!("[{}] TCP receive error: {}", peer_addr, e);
+                            self.handle_user_disconnect(peer_addr).await;
+                            return Ok(());
                         }
                     }
                 }
-                result = broadcast_rx.recv() => {
-                    match result {
-                        Ok(BroadcastEvent::UserJoined { username: other_user }) => {
-                            if other_user != username {
-                                let pkt = TcpPacket::new(
-                                    PacketTypeId::UserJoinedServer,
-                                    encode_username(&other_user),
-                                );
-                                socket.write_all(&pkt.encode()?).await?;
-                                socket.flush().await?;
-                                debug!("[{}] Broadcasted {} joined", peer_addr, other_user);
+
+                // Handle broadcast messages
+                broadcast_result = broadcast_rx.recv() => {
+                    match broadcast_result {
+                        Ok(message) => {
+                            if let Err(e) = self.handle_broadcast_message(&mut socket, peer_addr, message).await {
+                                error!("[{}] Failed to send broadcast message: {}", peer_addr, e);
+                                return Ok(());
                             }
                         }
-                        Ok(BroadcastEvent::UserLeft { username: other_user }) => {
-                            if other_user != username {
-                                let pkt = TcpPacket::new(
-                                    PacketTypeId::UserLeftServer,
-                                    encode_username(&other_user),
-                                );
-                                socket.write_all(&pkt.encode()?).await?;
-                                socket.flush().await?;
-                                debug!("[{}] Broadcasted {} left", peer_addr, other_user);
-                            }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            error!("[{}] Broadcast channel lagged, skipping messages", peer_addr);
                         }
-                        Ok(BroadcastEvent::UserJoinedVoice { username: other_user }) => {
-                            // Broadcast to all participants so they can update UI and create output streams
-                            if other_user != username {
-                                let pkt = TcpPacket::new(
-                                    PacketTypeId::UserJoinedVoice,
-                                    encode_username(&other_user),
-                                );
-                                socket.write_all(&pkt.encode()?).await?;
-                                socket.flush().await?;
-                                debug!("[{}] Broadcasted {} joined voice", peer_addr, other_user);
-                            }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            return Ok(());
                         }
-                        Ok(BroadcastEvent::UserLeftVoice { username: other_user }) => {
-                            // Broadcast to all participants so they can update UI
-                            if other_user != username {
-                                let pkt = TcpPacket::new(
-                                    PacketTypeId::UserLeftVoice,
-                                    encode_username(&other_user),
-                                );
-                                socket.write_all(&pkt.encode()?).await?;
-                                socket.flush().await?;
-                                debug!("[{}] Broadcasted {} left voice", peer_addr, other_user);
-                            }
-                        }
-                        Err(_) => break,
                     }
                 }
             }
         }
+    }
+
+    /// Handle incoming request packet from client
+    async fn handle_incoming_request(
+        &self,
+        socket: &mut TcpStream,
+        peer_addr: SocketAddr,
+        read_buf: &[u8],
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        // Try to parse the packet
+        match parse_packet(read_buf) {
+            Ok((packet_id, payload)) => {
+                // Dispatch to appropriate handler based on packet type
+                match packet_id {
+                    PacketId::LoginRequest => {
+                        if let Err(e) = self.handle_login_request(socket, peer_addr, &payload).await {
+                            error!("[{}] Failed to handle login request: {}", peer_addr, e);
+                        }
+                    }
+                    PacketId::JoinVoiceChannelRequest => {
+                        if let Err(e) = self.handle_join_voice_channel_request(peer_addr, &payload).await {
+                            error!("[{}] Failed to handle join voice channel request: {}", peer_addr, e);
+                        }
+                    }
+                    PacketId::LeaveVoiceChannelRequest => {
+                        if let Err(e) = self.handle_leave_voice_channel_request(peer_addr, &payload).await {
+                            error!("[{}] Failed to handle leave voice channel request: {}", peer_addr, e);
+                        }
+                    }
+                    _ => {
+                        error!("[Management] Unknown packet id {:?}", packet_id);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("[Management] Failed to parse packet from {}: {}", peer_addr, e);
+            }
+        }
+        Ok(true) // Continue processing
+    }
+
+    /// Handle broadcast message: filter and send to client if appropriate
+    async fn handle_broadcast_message(
+        &self,
+        socket: &mut TcpStream,
+        peer_addr: SocketAddr,
+        message: BroadcastMessage,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Check if we should send this message to this client
+        let should_send = match message.sender_addr {
+            Some(sender) => {
+                // If for_all is false, skip if this is the sender
+                message.for_all || sender != peer_addr
+            }
+            None => true, // Server broadcasts go to everyone
+        };
+
+        if should_send {
+            socket.write_all(&message.packet_data).await?;
+        }
 
         Ok(())
     }
 
-    /// Validate username: non-empty, reasonable length, valid UTF-8
-    fn validate_username(username: &str) -> Result<(), Box<dyn std::error::Error>> {
-        const MIN_LEN: usize = 1;
-        const MAX_LEN: usize = 32;
+    /// Handle login request: decode username, create user, store in users map, send response
+    async fn handle_login_request(
+        &self,
+        socket: &mut TcpStream,
+        peer_addr: SocketAddr,
+        payload: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Decode the login request to get username
+        let username = decode_login_request(payload)?;
 
-        if username.len() < MIN_LEN {
-            return Err("Username too short".into());
+        // Generate new user ID
+        let user_id = {
+            let mut id_lock = self.next_user_id.write().await;
+            let current_id = *id_lock;
+            *id_lock = current_id + 1;
+            current_id
+        };
+
+        let voice_token = random::<u64>();
+
+        // Create and store user
+        let username_clone = username.clone();
+        let user = User {
+            id: user_id,
+            username,
+            in_voice: false,
+            token: voice_token,
+        };
+
+        {
+            let mut users_lock = self.users.write().await;
+            users_lock.insert(peer_addr, user);
         }
-        if username.len() > MAX_LEN {
-            return Err("Username too long".into());
-        }
-        if !username.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-            return Err("Username contains invalid characters".into());
-        }
+
+        // Collect current participants for login response
+        let participants = {
+            let users_lock = self.users.read().await;
+            users_lock
+                .values()
+                .map(|u| ParticipantInfo {
+                    user_id: u.id,
+                    in_voice: u.in_voice,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Send login response with participant list
+        let response_packet = encode_login_response(user_id, voice_token, &participants)?;
+        socket.write_all(&response_packet).await?;
+
+        // Broadcast user joined server event to all other clients
+        let joined_packet = encode_user_joined_server(user_id, &username_clone)?;
+        let broadcast_msg = BroadcastMessage {
+            sender_addr: Some(peer_addr),
+            for_all: false, // Exclude the sender (new user) from this broadcast
+            packet_data: joined_packet,
+        };
+        
+        // Ignore broadcast send errors (they might happen if no subscribers)
+        let _ = self.broadcast_tx.send(broadcast_msg);
+
+        debug!("[{}] User logged in: id={}, username={}", peer_addr, user_id, username_clone);
+
         Ok(())
     }
 
-    /// Remove user from users HashMap and broadcast UserLeft event
-    async fn remove_participant(&self, peer_addr: SocketAddr, username: &str) {
-        let mut lock = self.users.write().await;
-        lock.remove(&peer_addr);
-        drop(lock);
-        let _ = self.broadcast_tx.send(BroadcastEvent::UserLeft {
-            username: username.to_string(),
-        });
+    /// Handle join voice channel request: update user voice state and broadcast event
+    async fn handle_join_voice_channel_request(
+        &self,
+        peer_addr: SocketAddr,
+        payload: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Decode the voice token from the request
+        let _voice_token = decode_join_voice_channel_request(payload)?;
+
+        // Get user ID and update in_voice state
+        let user_id = {
+            let mut users_lock = self.users.write().await;
+            if let Some(user) = users_lock.get_mut(&peer_addr) {
+                let user_id = user.id;
+                user.in_voice = true;
+                user_id
+            } else {
+                return Err("User not found in users map".into());
+            }
+        };
+
+        // Broadcast user joined voice event to all clients
+        let joined_voice_packet = encode_user_joined_voice(user_id)?;
+        let broadcast_msg = BroadcastMessage {
+            sender_addr: None,  // Server-initiated broadcast
+            for_all: true,      // Send to all clients
+            packet_data: joined_voice_packet,
+        };
+        let _ = self.broadcast_tx.send(broadcast_msg);
+
+        debug!("[{}] User joined voice channel: id={}", peer_addr, user_id);
+
+        Ok(())
+    }
+
+    /// Handle leave voice channel request: update user voice state and broadcast event
+    async fn handle_leave_voice_channel_request(
+        &self,
+        peer_addr: SocketAddr,
+        payload: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Decode the leave request
+        decode_leave_voice_channel_request(payload)?;
+
+        // Get user ID and update in_voice state
+        let user_id = {
+            let mut users_lock = self.users.write().await;
+            if let Some(user) = users_lock.get_mut(&peer_addr) {
+                let user_id = user.id;
+                user.in_voice = false;
+                user_id
+            } else {
+                return Err("User not found in users map".into());
+            }
+        };
+
+        // Broadcast user left voice event to all clients
+        let left_voice_packet = encode_user_left_voice(user_id)?;
+        let broadcast_msg = BroadcastMessage {
+            sender_addr: None,  // Server-initiated broadcast
+            for_all: true,      // Send to all clients
+            packet_data: left_voice_packet,
+        };
+
+        let _ = self.broadcast_tx.send(broadcast_msg);
+        let _ = self.disconnect_tx.send(user_id); // For UDP
+
+        debug!("[{}] User left voice channel: id={}", peer_addr, user_id);
+
+        Ok(())
+    }
+
+    /// Handle user disconnection: remove from users map and broadcast left server event
+    async fn handle_user_disconnect(&self, peer_addr: SocketAddr) {
+        // Remove user from the users HashMap
+        let user_option = {
+            let mut users_lock = self.users.write().await;
+            users_lock.remove(&peer_addr)
+        };
+
+        // If user was found, broadcast the disconnection and log
+        if let Some(user) = user_option {
+            // Broadcast user left server event to all clients
+            if let Ok(left_packet) = encode_user_left_server(user.id) {
+                let broadcast_msg = BroadcastMessage {
+                    sender_addr: None, // Server-initiated broadcast
+                    for_all: true,     // Send to all clients
+                    packet_data: left_packet,
+                };
+                // Ignore broadcast send errors
+                let _ = self.broadcast_tx.send(broadcast_msg);
+            }
+
+            // If user was in voice channel, broadcast user left voice event
+            if user.in_voice {
+                if let Ok(left_voice_packet) = encode_user_left_voice(user.id) {
+                    let broadcast_msg = BroadcastMessage {
+                        sender_addr: None,
+                        for_all: true,
+                        packet_data: left_voice_packet,
+                    };
+                    // Ignore broadcast send errors
+                    let _ = self.broadcast_tx.send(broadcast_msg);
+                }
+            }
+
+            // Notify voice relay server to clean up UDP session for this user
+            let _ = self.disconnect_tx.send(user.id);
+
+            debug!("[{}] User disconnected: id={}, username={}", peer_addr, user.id, user.username);
+        } else {
+            debug!("[{}] User disconnected but was not in users map", peer_addr);
+        }
     }
 }
