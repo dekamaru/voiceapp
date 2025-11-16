@@ -97,7 +97,7 @@ impl VoiceRelayServer {
         }
     }
 
-    /// Forward voice packet to all authenticated addresses except sender
+    /// Forward voice packet to authenticated addresses of users in voice channel
     /// Replaces SSRC with sender's user_id to prevent spoofing
     async fn forward_voice_packet(
         &self,
@@ -113,16 +113,19 @@ impl VoiceRelayServer {
 
                 // Get list of destination addresses
                 let authenticated_addrs = self.authenticated_addrs.read().await;
-                let dest_addrs: Vec<_> = authenticated_addrs
-                    .iter()
-                    .filter(|(_, &uid)| uid != sender_user_id)
-                    .map(|(addr, _)| *addr)
-                    .collect();
+                let mut dest_addrs = Vec::new();
+                for (&addr, &uid) in authenticated_addrs.iter() {
+                    // Skip sender and check if recipient is in voice channel
+                    // TODO: not optimised lookup
+                    if uid != sender_user_id && self.management.is_user_in_voice(uid).await {
+                        dest_addrs.push(addr);
+                    }
+                }
                 drop(authenticated_addrs);
 
                 // Encode the modified voice data back
                 let modified_packet = encode_voice_data(&voice_data);
-                // Forward to all authenticated addresses except sender
+                // Forward to all authenticated addresses of users in voice channel (except sender)
                 for dest_addr in dest_addrs {
                     if let Err(e) = udp_socket.send_to(&modified_packet, dest_addr).await {
                         error!("Failed to forward voice packet to {}: {}", dest_addr, e);

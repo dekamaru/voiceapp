@@ -64,6 +64,17 @@ impl ManagementServer {
             .map(|user| user.id)
     }
 
+    /// Check if a user is in the voice channel
+    /// TODO: not optimised lookup
+    pub async fn is_user_in_voice(&self, user_id: u64) -> bool {
+        let users_lock = self.users.read().await;
+        users_lock
+            .values()
+            .find(|user| user.id == user_id)
+            .map(|user| user.in_voice)
+            .unwrap_or(false)
+    }
+
     /// Get a receiver for disconnect events (broadcasts user_id when user disconnects)
     pub fn get_disconnect_rx(&self) -> broadcast::Receiver<u64> {
         self.disconnect_tx.subscribe()

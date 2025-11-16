@@ -38,22 +38,24 @@ async fn main() {
         tracing_subscriber::fmt::init();
     }
 
-    // Hardcoded username and server address for now
+    // Hardcoded username and server addresses for now
     let username = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "client".to_string());
-    let server_addr = "127.0.0.1:9001";
+    
+    let management_server_addr = "127.0.0.1:9001";
+    let voice_server_addr = "127.0.0.1:9002";
 
     info!("Starting VoiceApp client with username '{}'", username);
 
-    if let Err(e) = run_client(&username, server_addr).await {
+    if let Err(e) = run_client(&username, management_server_addr, voice_server_addr).await {
         error!("Client error: {}", e);
     }
 }
 
-async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_client(username: &str, management_server_addr: &str, voice_server_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Connect to voice server - all TCP/UDP setup is internal
-    let mut client = VoiceClient::connect(server_addr).await?;
+    let mut client = VoiceClient::connect(management_server_addr, voice_server_addr).await?;
     info!("Connected to voice server");
 
     // Authenticate with the server
