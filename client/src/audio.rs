@@ -118,6 +118,7 @@ fn stereo_to_mono_f32(stereo: &[f32], channels: u16) -> Vec<f32> {
 }
 
 /// Create input stream that captures audio and sends frames through channel
+/// This is public to allow AudioManager to use it
 pub fn create_input_stream() -> Result<AudioInputHandle, Box<dyn std::error::Error>> {
     let device = find_input_device()?;
     let (config, format) = get_stream_config(&device)?;

@@ -2,13 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, broadcast, RwLock, Mutex};
+use tokio::sync::{mpsc, broadcast, RwLock};
 use tracing::{debug, error, info};
 
 use voiceapp_protocol::{PacketId, ParticipantInfo};
 
-use crate::udp_voice_receiver::UdpVoiceReceiver;
-use crate::user_voice_stream::UserVoiceStreamManager;
 
 /// Errors that can occur with VoiceClient
 #[derive(Debug, Clone)]
@@ -44,7 +42,7 @@ pub struct VoiceClient {
     request_tx: mpsc::UnboundedSender<Vec<u8>>,
     response_rx: mpsc::UnboundedReceiver<(PacketId, Vec<u8>)>,
     event_rx: broadcast::Receiver<(PacketId, Vec<u8>)>,
-    voice_tx: mpsc::UnboundedSender<voiceapp_protocol::VoiceData>,
+    voice_input_tx: mpsc::UnboundedSender<Vec<f32>>,
 }
 
 impl VoiceClient {
@@ -61,14 +59,7 @@ impl VoiceClient {
         let (response_tx, response_rx) = mpsc::unbounded_channel();
         let (event_tx, _) = broadcast::channel(100);
         let event_rx = event_tx.subscribe();
-        let (voice_tx, _voice_rx) = mpsc::unbounded_channel();
-
-        // Spawn TCP handler thread
-        tokio::spawn(async move {
-            if let Err(e) = tcp_handler(socket, request_rx, response_tx, event_tx).await {
-                error!("TCP handler error: {}", e);
-            }
-        });
+        let (voice_input_tx, voice_input_rx) = mpsc::unbounded_channel();
 
         // Create client with empty state
         let client = VoiceClient {
@@ -78,14 +69,16 @@ impl VoiceClient {
                 participants: HashMap::new(),
                 in_voice_channel: false,
             })),
-            request_tx,
+            request_tx: request_tx.clone(),
             response_rx,
             event_rx,
-            voice_tx,
+            voice_input_tx,
         };
 
-        // Start event processor internally
+        // Spawn background tasks
+        client.spawn_tcp_handler(socket, request_rx, response_tx, event_tx);
         client.spawn_event_processor();
+        client.spawn_voice_encoder(voice_input_rx);
 
         Ok(client)
     }
@@ -169,10 +162,10 @@ impl VoiceClient {
         Ok(state.user_id)
     }
 
-    /// Get a sender for voice data packets
+    /// Get a sender for raw voice samples (Vec<f32>)
     /// Returns a cloneable sender that can be moved into async tasks
-    pub fn voice_sender(&self) -> mpsc::UnboundedSender<voiceapp_protocol::VoiceData> {
-        self.voice_tx.clone()
+    pub fn voice_input_sender(&self) -> mpsc::UnboundedSender<Vec<f32>> {
+        self.voice_input_tx.clone()
     }
 
     /// Spawn event processor task (called internally from connect)
@@ -197,6 +190,33 @@ impl VoiceClient {
                         debug!("Event stream lagged");
                     }
                 }
+            }
+        });
+    }
+
+    /// Spawn voice encoder task that processes incoming audio frames (called internally from connect)
+    fn spawn_voice_encoder(&self, voice_input_rx: mpsc::UnboundedReceiver<Vec<f32>>) {
+        tokio::spawn(async move {
+            let mut rx = voice_input_rx;
+            while let Some(_samples) = rx.recv().await {
+                // Consume frames as noop for now
+                // TODO: Implement voice encoding and transmission
+            }
+            debug!("Voice encoding task ended");
+        });
+    }
+
+    /// Spawn TCP handler task (called internally from connect)
+    fn spawn_tcp_handler(
+        &self,
+        socket: TcpStream,
+        request_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        response_tx: mpsc::UnboundedSender<(PacketId, Vec<u8>)>,
+        event_tx: broadcast::Sender<(PacketId, Vec<u8>)>,
+    ) {
+        tokio::spawn(async move {
+            if let Err(e) = tcp_handler(socket, request_rx, response_tx, event_tx).await {
+                error!("TCP handler error: {}", e);
             }
         });
     }
