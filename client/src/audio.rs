@@ -11,19 +11,6 @@ const AUDIO_BUFFER_CAPACITY: usize = 48000; // ~1000ms at 48kHz - larger buffer 
 /// Audio frame: mono F32 samples at 48kHz
 pub type AudioFrame = Vec<f32>;
 
-/// Handle to manage audio input stream lifecycle
-pub struct AudioInputHandle {
-    _stream: Stream, // kept alive to maintain audio stream; dropping it stops the stream
-    receiver: Option<mpsc::Receiver<AudioFrame>>,
-}
-
-impl AudioInputHandle {
-    /// Extract the receiver from this handle (consuming it)
-    pub fn take_receiver(&mut self) -> Result<mpsc::Receiver<AudioFrame>, String> {
-        self.receiver.take().ok_or_else(|| "receiver was already taken".to_string())
-    }
-}
-
 /// Find and validate input device
 fn find_input_device() -> Result<Device, Box<dyn std::error::Error>> {
     let host = cpal::default_host();
@@ -118,8 +105,8 @@ fn stereo_to_mono_f32(stereo: &[f32], channels: u16) -> Vec<f32> {
 }
 
 /// Create input stream that captures audio and sends frames through channel
-/// This is public to allow AudioManager to use it
-pub fn create_input_stream() -> Result<AudioInputHandle, Box<dyn std::error::Error>> {
+/// Returns the stream (to keep it alive) and a receiver for audio frames
+pub fn create_input_stream() -> Result<(Stream, mpsc::Receiver<AudioFrame>), Box<dyn std::error::Error>> {
     let device = find_input_device()?;
     let (config, format) = get_stream_config(&device)?;
 
@@ -214,5 +201,5 @@ pub fn create_input_stream() -> Result<AudioInputHandle, Box<dyn std::error::Err
     stream.play()?;
     debug!("Input stream started");
 
-    Ok(AudioInputHandle { _stream: stream, receiver: Some(rx) })
+    Ok((stream, rx))
 }

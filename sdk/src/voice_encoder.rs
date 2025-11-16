@@ -2,13 +2,12 @@ use opus::{Channels, Encoder};
 use tracing::debug;
 use voiceapp_protocol::VoiceData;
 
-const SAMPLE_RATE: u32 = 48000;
-const OPUS_FRAME_SAMPLES: usize = 960; // 20ms at 48kHz
+pub const SAMPLE_RATE: u32 = 48000;
+pub const OPUS_FRAME_SAMPLES: usize = 960; // 20ms at 48kHz
 
 /// Manages Opus encoding of audio frames
 pub struct VoiceEncoder {
     encoder: Encoder,
-    pub ssrc: u64, // User ID from server
     pub sequence: u32,
     pub timestamp: u32,
     sample_buffer: Vec<f32>,
@@ -16,7 +15,7 @@ pub struct VoiceEncoder {
 
 impl VoiceEncoder {
     /// Create a new voice encoder for the given user ID
-    pub fn new(user_id: u64) -> Result<Self, opus::Error> {
+    pub fn new() -> Result<Self, opus::Error> {
         let mut encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, opus::Application::Voip)?;
 
         // Set encoding parameters
@@ -24,7 +23,6 @@ impl VoiceEncoder {
 
         Ok(VoiceEncoder {
             encoder,
-            ssrc: user_id,
             sequence: 0,
             timestamp: 0,
             sample_buffer: Vec::with_capacity(OPUS_FRAME_SAMPLES * 2),
@@ -49,7 +47,7 @@ impl VoiceEncoder {
             let packet = VoiceData {
                 sequence: self.sequence,
                 timestamp: self.timestamp,
-                ssrc: self.ssrc,
+                ssrc: 0,
                 opus_frame,
             };
             packets.push(packet);
@@ -84,7 +82,7 @@ impl VoiceEncoder {
         let packet = VoiceData {
             sequence: self.sequence,
             timestamp: self.timestamp,
-            ssrc: self.ssrc,
+            ssrc: 0,
             opus_frame,
         };
 

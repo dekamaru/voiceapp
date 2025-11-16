@@ -1,14 +1,15 @@
+use cpal::Stream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 use std::sync::{Arc, Mutex};
 
-use crate::audio::{create_input_stream, AudioInputHandle};
+use crate::audio::create_input_stream;
 
 /// Audio manager that handles recording lifecycle and voice data transmission
 pub struct AudioManager {
     voice_input_tx: mpsc::UnboundedSender<Vec<f32>>,
-    audio_handle: Arc<Mutex<Option<AudioInputHandle>>>,
+    stream: Arc<Mutex<Option<Stream>>>,
     receiver_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
@@ -17,7 +18,7 @@ impl AudioManager {
     pub fn new(voice_input_tx: mpsc::UnboundedSender<Vec<f32>>) -> Self {
         AudioManager {
             voice_input_tx,
-            audio_handle: Arc::new(Mutex::new(None)),
+            stream: Arc::new(Mutex::new(None)),
             receiver_task: Arc::new(Mutex::new(None)),
         }
     }
@@ -27,8 +28,7 @@ impl AudioManager {
         info!("Starting audio recording");
 
         // Create the input stream
-        let mut audio_handle = create_input_stream()?;
-        let receiver = audio_handle.take_receiver()?;
+        let (stream, receiver) = create_input_stream()?;
 
         // Spawn a task to read from the receiver and forward to SDK
         let voice_input_tx = self.voice_input_tx.clone();
@@ -43,8 +43,8 @@ impl AudioManager {
             debug!("Audio receiver task ended");
         });
 
-        // Store the audio handle and task
-        *self.audio_handle.lock().unwrap() = Some(audio_handle);
+        // Store the stream and task
+        *self.stream.lock().unwrap() = Some(stream);
         *self.receiver_task.lock().unwrap() = Some(task);
 
         info!("Audio recording started");
@@ -55,9 +55,9 @@ impl AudioManager {
     pub async fn stop_recording(&self) {
         info!("Stopping audio recording");
 
-        // Drop the audio handle (this stops the stream and closes the receiver)
-        if let Ok(mut handle) = self.audio_handle.lock() {
-            *handle = None;
+        // Drop the stream (this stops the stream and closes the receiver)
+        if let Ok(mut stream_opt) = self.stream.lock() {
+            *stream_opt = None;
         }
 
         // Abort the receiver task

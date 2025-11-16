@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, broadcast, RwLock};
 use tracing::{debug, error, info};
 
 use voiceapp_protocol::{PacketId, ParticipantInfo};
-
+use crate::voice_encoder::{VoiceEncoder, OPUS_FRAME_SAMPLES};
 
 /// Errors that can occur with VoiceClient
 #[derive(Debug, Clone)]
@@ -14,6 +14,7 @@ pub enum VoiceClientError {
     ConnectionFailed(String),
     Disconnected,
     Timeout(String),
+    SystemError(String),
 }
 
 impl std::fmt::Display for VoiceClientError {
@@ -22,6 +23,7 @@ impl std::fmt::Display for VoiceClientError {
             VoiceClientError::ConnectionFailed(msg) => write!(f, "Connection failed: {}", msg),
             VoiceClientError::Disconnected => write!(f, "Disconnected from server"),
             VoiceClientError::Timeout(msg) => write!(f, "Timeout exceeded {}", msg),
+            VoiceClientError::SystemError(msg) => write!(f, "System error: {}", msg),
         }
     }
 }
@@ -47,13 +49,6 @@ pub struct VoiceClient {
 
 impl VoiceClient {
     pub async fn connect(server_addr: &str) -> Result<Self, VoiceClientError> {
-        // Connect to server
-        let socket = TcpStream::connect(server_addr)
-            .await
-            .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
-
-        info!("Connected to {}", server_addr);
-
         // Create channels
         let (request_tx, request_rx) = mpsc::unbounded_channel();
         let (response_tx, response_rx) = mpsc::unbounded_channel();
@@ -75,10 +70,17 @@ impl VoiceClient {
             voice_input_tx,
         };
 
+        // Connect to server
+        let tcp_socket = TcpStream::connect(server_addr)
+            .await
+            .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
+
+        info!("Connected to {}", server_addr);
+
         // Spawn background tasks
-        client.spawn_tcp_handler(socket, request_rx, response_tx, event_tx);
+        client.spawn_tcp_handler(tcp_socket, request_rx, response_tx, event_tx);
         client.spawn_event_processor();
-        client.spawn_voice_encoder(voice_input_rx);
+        client.spawn_voice_transmitter(voice_input_rx);
 
         Ok(client)
     }
@@ -194,15 +196,41 @@ impl VoiceClient {
         });
     }
 
-    /// Spawn voice encoder task that processes incoming audio frames (called internally from connect)
-    fn spawn_voice_encoder(&self, voice_input_rx: mpsc::UnboundedReceiver<Vec<f32>>) {
+    /// Spawn voice transmitter task that encodes audio frames
+    fn spawn_voice_transmitter(&self, voice_input_rx: mpsc::UnboundedReceiver<Vec<f32>>) {
         tokio::spawn(async move {
             let mut rx = voice_input_rx;
-            while let Some(_samples) = rx.recv().await {
-                // Consume frames as noop for now
-                // TODO: Implement voice encoding and transmission
+            let mut encoder = match VoiceEncoder::new() {
+                Ok(enc) => enc,
+                Err(e) => {
+                    error!("Failed to create voice encoder: {}", e);
+                    return;
+                }
+            };
+
+            // Buffer to accumulate samples until we have OPUS_FRAME_SAMPLES
+            let mut sample_buffer = Vec::with_capacity(OPUS_FRAME_SAMPLES * 2);
+
+            while let Some(samples) = rx.recv().await {
+                // Add received samples to buffer
+                sample_buffer.extend_from_slice(&samples);
+
+                // Encode complete frames
+                while sample_buffer.len() >= OPUS_FRAME_SAMPLES {
+                    let frame: Vec<f32> = sample_buffer.drain(0..OPUS_FRAME_SAMPLES).collect();
+                    // Encode frame (ignore result for now)
+                    let _ = encoder.encode_frame(&frame);
+                    debug!("Encoded frame with {} samples", frame.len());
+                }
             }
-            debug!("Voice encoding task ended");
+
+            // Encode any remaining samples (less than 960)
+            if !sample_buffer.is_empty() {
+                debug!("Encoding final frame with {} samples", sample_buffer.len());
+                let _ = encoder.encode_frame(&sample_buffer);
+            }
+
+            debug!("Voice transmitter task ended");
         });
     }
 
