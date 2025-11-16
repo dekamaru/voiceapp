@@ -138,19 +138,13 @@ pub fn create_output_stream() -> Result<AudioOutputHandle, Box<dyn std::error::E
                     let mut buffer = sample_buffer.lock().unwrap();
 
                     // Fill output buffer sample by sample from the VecDeque
-                    let mut filled = 0;
                     for sample in output.iter_mut() {
                         if let Some(s) = buffer.pop_front() {
                             *sample = s;
-                            filled += 1;
                         } else {
                             // No more samples available, fill with silence
                             *sample = 0.0;
                         }
-                    }
-
-                    if filled < output.len() {
-                        debug!("Output callback: buffer underrun, filled {}/{} samples", filled, output.len());
                     }
                 },
                 move |err| {

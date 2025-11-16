@@ -1,16 +1,19 @@
 use cpal::Stream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, broadcast};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 use std::sync::{Arc, Mutex};
 
 use crate::audio::create_input_stream;
+use crate::output::{create_output_stream, AudioOutputHandle};
 
 /// Audio manager that handles recording lifecycle and voice data transmission
 pub struct AudioManager {
     voice_input_tx: mpsc::UnboundedSender<Vec<f32>>,
-    stream: Arc<Mutex<Option<Stream>>>,
-    receiver_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    input_stream: Arc<Mutex<Option<Stream>>>,
+    input_receiver_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    output_handle: Arc<Mutex<Option<AudioOutputHandle>>>,
+    output_receiver_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl AudioManager {
@@ -18,8 +21,10 @@ impl AudioManager {
     pub fn new(voice_input_tx: mpsc::UnboundedSender<Vec<f32>>) -> Self {
         AudioManager {
             voice_input_tx,
-            stream: Arc::new(Mutex::new(None)),
-            receiver_task: Arc::new(Mutex::new(None)),
+            input_stream: Arc::new(Mutex::new(None)),
+            input_receiver_task: Arc::new(Mutex::new(None)),
+            output_handle: Arc::new(Mutex::new(None)),
+            output_receiver_task: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -44,8 +49,8 @@ impl AudioManager {
         });
 
         // Store the stream and task
-        *self.stream.lock().unwrap() = Some(stream);
-        *self.receiver_task.lock().unwrap() = Some(task);
+        *self.input_stream.lock().unwrap() = Some(stream);
+        *self.input_receiver_task.lock().unwrap() = Some(task);
 
         info!("Audio recording started");
         Ok(())
@@ -55,18 +60,78 @@ impl AudioManager {
     pub async fn stop_recording(&self) {
         info!("Stopping audio recording");
 
-        // Drop the stream (this stops the stream and closes the receiver)
-        if let Ok(mut stream_opt) = self.stream.lock() {
+        // Drop the input stream (this stops the stream and closes the receiver)
+        if let Ok(mut stream_opt) = self.input_stream.lock() {
             *stream_opt = None;
         }
 
-        // Abort the receiver task
-        if let Ok(mut task_opt) = self.receiver_task.lock() {
+        // Abort the input receiver task
+        if let Ok(mut task_opt) = self.input_receiver_task.lock() {
             if let Some(task) = task_opt.take() {
                 task.abort();
             }
         }
 
         info!("Audio recording stopped");
+    }
+
+    /// Start playing audio output from decoded voice stream
+    pub async fn start_playback(&self, voice_output_rx: broadcast::Receiver<Vec<f32>>) -> Result<(), Box<dyn std::error::Error>> {
+        info!("Starting audio playback");
+
+        // Create the output stream
+        let output_handle = create_output_stream()?;
+        let output_sender = output_handle.sender();
+
+        // Spawn a task to read from voice output and send to playback
+        let task = tokio::spawn(async move {
+            let mut rx = voice_output_rx;
+            loop {
+                match rx.recv().await {
+                    Ok(pcm_samples) => {
+                        // Convert mono to stereo for playback
+                        let stereo_samples = voiceapp_sdk::mono_to_stereo(&pcm_samples);
+                        if let Err(e) = output_sender.send(stereo_samples) {
+                            error!("Failed to send audio to playback: {}", e);
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        debug!("Voice output stream closed");
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        debug!("Voice output stream lagged, skipping frames");
+                    }
+                }
+            }
+            debug!("Audio playback task ended");
+        });
+
+        // Store the output handle to keep the stream alive and the task
+        *self.output_handle.lock().unwrap() = Some(output_handle);
+        *self.output_receiver_task.lock().unwrap() = Some(task);
+
+        info!("Audio playback started");
+        Ok(())
+    }
+
+    /// Stop playing audio output
+    pub async fn stop_playback(&self) {
+        info!("Stopping audio playback");
+
+        // Drop the output handle (this stops the stream)
+        if let Ok(mut handle_opt) = self.output_handle.lock() {
+            *handle_opt = None;
+        }
+
+        // Abort the output receiver task
+        if let Ok(mut task_opt) = self.output_receiver_task.lock() {
+            if let Some(task) = task_opt.take() {
+                task.abort();
+            }
+        }
+
+        info!("Audio playback stopped");
     }
 }

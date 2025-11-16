@@ -63,9 +63,15 @@ async fn run_client(username: &str, management_server_addr: &str, voice_server_a
     info!("Authenticated as '{}'", username);
     info!("Type 'join' to join voice channel, 'leave' to stop, or 'help' for commands");
 
-    // Create AudioManager with SDK's voice input sender
+    // Create AudioManager with SDK's voice input sender and output receiver
     let voice_input_tx = client.voice_input_sender();
+    let voice_output_rx = client.voice_output_receiver();
     let audio_manager = AudioManager::new(voice_input_tx);
+
+    // Start audio playback
+    if let Err(e) = audio_manager.start_playback(voice_output_rx).await {
+        error!("Failed to start audio playback: {}", e);
+    }
 
     // Create channel for stdin commands
     let (tx, mut rx) = mpsc::channel::<String>(32);
@@ -103,6 +109,7 @@ async fn run_client(username: &str, management_server_addr: &str, voice_server_a
                         }
                         UserCommand::Leave => {
                             audio_manager.stop_recording().await;
+                            audio_manager.stop_playback().await;
                             match client.leave_channel().await {
                                 Ok(_) => {
                                     info!("Left voice channel");
