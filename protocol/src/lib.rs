@@ -19,6 +19,8 @@ pub use requests::{
 pub use responses::{
     decode_login_response, encode_login_response,
     encode_voice_auth_response, decode_voice_auth_response,
+    encode_join_voice_channel_response, decode_join_voice_channel_response,
+    encode_leave_voice_channel_response, decode_leave_voice_channel_response,
 };
 pub use events::{
     encode_user_joined_server, decode_user_joined_server,

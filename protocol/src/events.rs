@@ -15,7 +15,7 @@ pub struct ParticipantInfo {
 
 /// Encode user joined server event packet
 /// Format: [packet_id: u8][payload_len: u16][user_id: u64 BE][username...null]
-pub fn encode_user_joined_server(user_id: u64, username: &str) -> io::Result<Vec<u8>> {
+pub fn encode_user_joined_server(user_id: u64, username: &str) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&user_id.to_be_bytes());
     payload.extend_from_slice(username.as_bytes());
@@ -25,21 +25,21 @@ pub fn encode_user_joined_server(user_id: u64, username: &str) -> io::Result<Vec
 
 /// Encode user joined voice event packet
 /// Format: [packet_id: u8][payload_len: u16][user_id: u64 BE]
-pub fn encode_user_joined_voice(user_id: u64) -> io::Result<Vec<u8>> {
+pub fn encode_user_joined_voice(user_id: u64) -> Vec<u8> {
     let payload = user_id.to_be_bytes().to_vec();
     serialize_packet(PacketId::UserJoinedVoice, &payload)
 }
 
 /// Encode user left voice event packet
 /// Format: [packet_id: u8][payload_len: u16][user_id: u64 BE]
-pub fn encode_user_left_voice(user_id: u64) -> io::Result<Vec<u8>> {
+pub fn encode_user_left_voice(user_id: u64) -> Vec<u8> {
     let payload = user_id.to_be_bytes().to_vec();
     serialize_packet(PacketId::UserLeftVoice, &payload)
 }
 
 /// Encode user left server event packet
 /// Format: [packet_id: u8][payload_len: u16][user_id: u64 BE]
-pub fn encode_user_left_server(user_id: u64) -> io::Result<Vec<u8>> {
+pub fn encode_user_left_server(user_id: u64) -> Vec<u8> {
     let payload = user_id.to_be_bytes().to_vec();
     serialize_packet(PacketId::UserLeftServer, &payload)
 }

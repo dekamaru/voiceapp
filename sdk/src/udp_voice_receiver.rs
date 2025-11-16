@@ -78,7 +78,7 @@ impl UdpVoiceReceiver {
     /// Send a voice packet to the server from the receiver's socket
     pub async fn send_voice_packet(&self, packet: &VoiceData, server_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
         use voiceapp_protocol::encode_voice_data;
-        let data = encode_voice_data(packet)?;
+        let data = encode_voice_data(packet);
         self.send_to(&data, server_addr).await
     }
 

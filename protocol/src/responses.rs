@@ -17,7 +17,7 @@ pub struct LoginResponse {
 
 /// Encode login response packet
 /// Format: [packet_id: u8][payload_len: u16][id: u64 BE][voice_token: u64 BE][count: u16][user_id: u64 BE][in_voice: u8]...
-pub fn encode_login_response(id: u64, voice_token: u64, participants: &[ParticipantInfo]) -> io::Result<Vec<u8>> {
+pub fn encode_login_response(id: u64, voice_token: u64, participants: &[ParticipantInfo]) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&id.to_be_bytes());
     payload.extend_from_slice(&voice_token.to_be_bytes());
@@ -34,9 +34,23 @@ pub fn encode_login_response(id: u64, voice_token: u64, participants: &[Particip
 
 /// Encode UDP auth response packet
 /// Format: [packet_id: u8][payload_len: u16][success: u8]
-pub fn encode_voice_auth_response(success: bool) -> io::Result<Vec<u8>> {
+pub fn encode_voice_auth_response(success: bool) -> Vec<u8> {
     let payload = vec![if success { 1u8 } else { 0u8 }];
     serialize_packet(PacketId::VoiceAuthResponse, &payload)
+}
+
+/// Encode join voice channel response packet
+/// Format: [packet_id: u8][payload_len: u16][success: u8]
+pub fn encode_join_voice_channel_response(success: bool) -> Vec<u8> {
+    let payload = vec![if success { 1u8 } else { 0u8 }];
+    serialize_packet(PacketId::JoinVoiceChannelResponse, &payload)
+}
+
+/// Encode leave voice channel response packet
+/// Format: [packet_id: u8][payload_len: u16][success: u8]
+pub fn encode_leave_voice_channel_response(success: bool) -> Vec<u8> {
+    let payload = vec![if success { 1u8 } else { 0u8 }];
+    serialize_packet(PacketId::LeaveVoiceChannelResponse, &payload)
 }
 
 // Decode functions
@@ -87,6 +101,32 @@ pub fn decode_voice_auth_response(data: &[u8]) -> io::Result<bool> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "auth response payload too short",
+        ));
+    }
+
+    Ok(data[0] != 0)
+}
+
+/// Decode join voice channel response payload
+/// Format: [success: u8]
+pub fn decode_join_voice_channel_response(data: &[u8]) -> io::Result<bool> {
+    if data.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "join voice response payload too short",
+        ));
+    }
+
+    Ok(data[0] != 0)
+}
+
+/// Decode leave voice channel response payload
+/// Format: [success: u8]
+pub fn decode_leave_voice_channel_response(data: &[u8]) -> io::Result<bool> {
+    if data.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "leave voice response payload too short",
         ));
     }
 

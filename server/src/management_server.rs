@@ -9,6 +9,7 @@ use voiceapp_protocol::{
     decode_login_request, encode_login_response,
     encode_user_joined_server, encode_user_left_server,
     encode_user_joined_voice, encode_user_left_voice,
+    encode_join_voice_channel_response, encode_leave_voice_channel_response,
 };
 use std::collections::HashMap;
 use rand::random;
@@ -158,12 +159,12 @@ impl ManagementServer {
                         }
                     }
                     PacketId::JoinVoiceChannelRequest => {
-                        if let Err(e) = self.handle_join_voice_channel_request(peer_addr).await {
+                        if let Err(e) = self.handle_join_voice_channel_request(socket, peer_addr).await {
                             error!("[{}] Failed to handle join voice channel request: {}", peer_addr, e);
                         }
                     }
                     PacketId::LeaveVoiceChannelRequest => {
-                        if let Err(e) = self.handle_leave_voice_channel_request(peer_addr).await {
+                        if let Err(e) = self.handle_leave_voice_channel_request(socket, peer_addr).await {
                             error!("[{}] Failed to handle leave voice channel request: {}", peer_addr, e);
                         }
                     }
@@ -197,6 +198,7 @@ impl ManagementServer {
 
         if should_send {
             socket.write_all(&message.packet_data).await?;
+            socket.flush().await?;
         }
 
         Ok(())
@@ -249,11 +251,12 @@ impl ManagementServer {
         };
 
         // Send login response with participant list
-        let response_packet = encode_login_response(user_id, voice_token, &participants)?;
+        let response_packet = encode_login_response(user_id, voice_token, &participants);
         socket.write_all(&response_packet).await?;
+        socket.flush().await?;
 
         // Broadcast user joined server event to all other clients
-        let joined_packet = encode_user_joined_server(user_id, &username_clone)?;
+        let joined_packet = encode_user_joined_server(user_id, &username_clone);
         let broadcast_msg = BroadcastMessage {
             sender_addr: Some(peer_addr),
             for_all: false, // Exclude the sender (new user) from this broadcast
@@ -268,8 +271,8 @@ impl ManagementServer {
         Ok(())
     }
 
-    /// Handle join voice channel request: update user voice state and broadcast event
-    async fn handle_join_voice_channel_request(&self, peer_addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    /// Handle join voice channel request: send response to caller and broadcast event excluding caller
+    async fn handle_join_voice_channel_request(&self, socket: &mut TcpStream, peer_addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         // Get user ID and update in_voice state
         let user_id = {
             let mut users_lock = self.users.write().await;
@@ -282,11 +285,16 @@ impl ManagementServer {
             }
         };
 
-        // Broadcast user joined voice event to all clients
-        let joined_voice_packet = encode_user_joined_voice(user_id)?;
+        // Send response to caller
+        let response_packet = encode_join_voice_channel_response(true);
+        socket.write_all(&response_packet).await?;
+        socket.flush().await?;
+
+        // Broadcast user joined voice event to all other clients (exclude caller)
+        let joined_voice_packet = encode_user_joined_voice(user_id);
         let broadcast_msg = BroadcastMessage {
-            sender_addr: None,  // Server-initiated broadcast
-            for_all: true,      // Send to all clients
+            sender_addr: Some(peer_addr),  // Set sender to enable exclusion
+            for_all: false,                // Exclude the sender
             packet_data: joined_voice_packet,
         };
         let _ = self.broadcast_tx.send(broadcast_msg);
@@ -296,8 +304,8 @@ impl ManagementServer {
         Ok(())
     }
 
-    /// Handle leave voice channel request: update user voice state and broadcast event
-    async fn handle_leave_voice_channel_request(&self, peer_addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    /// Handle leave voice channel request: send response to caller and broadcast event excluding caller
+    async fn handle_leave_voice_channel_request(&self, socket: &mut TcpStream, peer_addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         // Get user ID and update in_voice state
         let user_id = {
             let mut users_lock = self.users.write().await;
@@ -310,11 +318,16 @@ impl ManagementServer {
             }
         };
 
-        // Broadcast user left voice event to all clients
-        let left_voice_packet = encode_user_left_voice(user_id)?;
+        // Send response to caller
+        let response_packet = encode_leave_voice_channel_response(true);
+        socket.write_all(&response_packet).await?;
+        socket.flush().await?;
+
+        // Broadcast user left voice event to all other clients (exclude caller)
+        let left_voice_packet = encode_user_left_voice(user_id);
         let broadcast_msg = BroadcastMessage {
-            sender_addr: None,  // Server-initiated broadcast
-            for_all: true,      // Send to all clients
+            sender_addr: Some(peer_addr),  // Set sender to enable exclusion
+            for_all: false,                // Exclude the sender
             packet_data: left_voice_packet,
         };
 
@@ -337,27 +350,25 @@ impl ManagementServer {
         // If user was found, broadcast the disconnection and log
         if let Some(user) = user_option {
             // Broadcast user left server event to all clients
-            if let Ok(left_packet) = encode_user_left_server(user.id) {
-                let broadcast_msg = BroadcastMessage {
-                    sender_addr: None, // Server-initiated broadcast
-                    for_all: true,     // Send to all clients
-                    packet_data: left_packet,
-                };
-                // Ignore broadcast send errors
-                let _ = self.broadcast_tx.send(broadcast_msg);
-            }
+            let left_packet = encode_user_left_server(user.id);
+            let broadcast_msg = BroadcastMessage {
+                sender_addr: None, // Server-initiated broadcast
+                for_all: true,     // Send to all clients
+                packet_data: left_packet,
+            };
+            // Ignore broadcast send errors
+            let _ = self.broadcast_tx.send(broadcast_msg);
 
             // If user was in voice channel, broadcast user left voice event
             if user.in_voice {
-                if let Ok(left_voice_packet) = encode_user_left_voice(user.id) {
-                    let broadcast_msg = BroadcastMessage {
-                        sender_addr: None,
-                        for_all: true,
-                        packet_data: left_voice_packet,
-                    };
-                    // Ignore broadcast send errors
-                    let _ = self.broadcast_tx.send(broadcast_msg);
-                }
+                let left_voice_packet = encode_user_left_voice(user.id);
+                let broadcast_msg = BroadcastMessage {
+                    sender_addr: None,
+                    for_all: true,
+                    packet_data: left_voice_packet,
+                };
+                // Ignore broadcast send errors
+                let _ = self.broadcast_tx.send(broadcast_msg);
             }
 
             // Notify voice relay server to clean up UDP session for this user

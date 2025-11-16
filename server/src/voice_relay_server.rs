@@ -121,17 +121,11 @@ impl VoiceRelayServer {
                 drop(authenticated_addrs);
 
                 // Encode the modified voice data back
-                match encode_voice_data(&voice_data) {
-                    Ok(modified_packet) => {
-                        // Forward to all authenticated addresses except sender
-                        for dest_addr in dest_addrs {
-                            if let Err(e) = udp_socket.send_to(&modified_packet, dest_addr).await {
-                                error!("Failed to forward voice packet to {}: {}", dest_addr, e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to encode voice packet: {}", e);
+                let modified_packet = encode_voice_data(&voice_data);
+                // Forward to all authenticated addresses except sender
+                for dest_addr in dest_addrs {
+                    if let Err(e) = udp_socket.send_to(&modified_packet, dest_addr).await {
+                        error!("Failed to forward voice packet to {}: {}", dest_addr, e);
                     }
                 }
             }
@@ -169,17 +163,11 @@ impl VoiceRelayServer {
                 }
 
                 // Send response back to client
-                match encode_voice_auth_response(token_valid) {
-                    Ok(response_data) => {
-                        if let Err(e) = udp_socket.send_to(&response_data, src_addr).await {
-                            error!("Failed to send auth response to {}: {}", src_addr, e);
-                        } else {
-                            debug!("Sent auth response (success={}) to {}", token_valid, src_addr);
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to encode auth response: {}", e);
-                    }
+                let response_data = encode_voice_auth_response(token_valid);
+                if let Err(e) = udp_socket.send_to(&response_data, src_addr).await {
+                    error!("Failed to send auth response to {}: {}", src_addr, e);
+                } else {
+                    debug!("Sent auth response (success={}) to {}", token_valid, src_addr);
                 }
             }
             Err(e) => {

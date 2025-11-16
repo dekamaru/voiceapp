@@ -15,6 +15,8 @@ pub enum PacketId {
     // Responses (0x11-0x20)
     LoginResponse = 0x11,
     VoiceAuthResponse = 0x12,
+    JoinVoiceChannelResponse = 0x13,
+    LeaveVoiceChannelResponse = 0x14,
 
     // Events (0x21-0x40)
     UserJoinedServer = 0x21,
@@ -33,6 +35,8 @@ impl PacketId {
             0x05 => Some(PacketId::LeaveVoiceChannelRequest),
             0x11 => Some(PacketId::LoginResponse),
             0x12 => Some(PacketId::VoiceAuthResponse),
+            0x13 => Some(PacketId::JoinVoiceChannelResponse),
+            0x14 => Some(PacketId::LeaveVoiceChannelResponse),
             0x21 => Some(PacketId::UserJoinedServer),
             0x22 => Some(PacketId::UserJoinedVoice),
             0x23 => Some(PacketId::UserLeftVoice),
@@ -75,10 +79,10 @@ pub fn parse_packet(buf: &[u8]) -> io::Result<(PacketId, &[u8])> {
 
 /// Serialize a packet with given payload
 /// Format: [packet_id: u8][payload_len: u16][payload...]
-pub fn serialize_packet(id: PacketId, payload: &[u8]) -> io::Result<Vec<u8>> {
+pub fn serialize_packet(id: PacketId, payload: &[u8]) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.push(id.as_u8());
     buf.extend_from_slice(&(payload.len() as u16).to_be_bytes());
     buf.extend_from_slice(payload);
-    Ok(buf)
+    buf
 }

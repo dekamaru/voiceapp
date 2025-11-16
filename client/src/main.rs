@@ -48,9 +48,9 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
     client.authenticate(username).await?;
     info!("Authenticated as '{}'", username);
 
-    // Subscribe to incoming audio frames
-    let mut audio_output_rx = client.audio_output().await
-        .ok_or("Failed to subscribe to audio output")?;
+    // // Subscribe to incoming audio frames
+    // let mut audio_output_rx = client.audio_output().await
+    //     .ok_or("Failed to subscribe to audio output")?;
 
     // Initialize audio state
     let mut audio_state = AudioState::Idle;
@@ -69,6 +69,7 @@ async fn run_client(username: &str, server_addr: &str) -> Result<(), Box<dyn std
             }
         }
     });
+
 
     // Main event loop
     loop {
