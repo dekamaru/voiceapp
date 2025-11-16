@@ -102,6 +102,7 @@ pub fn create_output_stream() -> Result<AudioOutputHandle, Box<dyn std::error::E
     debug!("Creating output stream...");
     let device = find_output_device()?;
     let (config, format) = get_stream_config(&device)?;
+    let channels = config.channels;
 
     info!(
         "Output stream config: {} channels, {} Hz, format: {:?}",
@@ -115,11 +116,20 @@ pub fn create_output_stream() -> Result<AudioOutputHandle, Box<dyn std::error::E
     let sample_buffer = Arc::new(Mutex::new(VecDeque::<f32>::with_capacity(OUTPUT_BUFFER_CAPACITY)));
 
     // Spawn task to receive frames and feed them into the sample buffer
+    // Convert mono to stereo if needed based on device channel count
     let sample_buffer_clone = sample_buffer.clone();
     tokio::spawn(async move {
         while let Ok(frame) = rx.recv() {
             let mut buffer = sample_buffer_clone.lock().unwrap();
-            buffer.extend(frame.iter().cloned());
+
+            // Convert mono to stereo if device has 2 channels
+            let audio_data = if channels == 2 {
+                mono_to_stereo(&frame)
+            } else {
+                frame
+            };
+
+            buffer.extend(audio_data.iter().cloned());
 
             // Log if buffer is getting full
             if buffer.len() > OUTPUT_BUFFER_CAPACITY * 90 / 100 {
@@ -223,4 +233,14 @@ pub fn create_output_stream() -> Result<AudioOutputHandle, Box<dyn std::error::E
         _stream: stream,
         sender: tx,
     })
+}
+
+/// Convert mono audio to stereo by duplicating channels
+fn mono_to_stereo(mono: &[f32]) -> Vec<f32> {
+    let mut stereo = Vec::with_capacity(mono.len() * 2);
+    for &sample in mono {
+        stereo.push(sample);
+        stereo.push(sample); // Duplicate to stereo
+    }
+    stereo
 }

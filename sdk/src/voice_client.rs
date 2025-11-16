@@ -6,8 +6,7 @@ use tokio::sync::{mpsc, broadcast, RwLock};
 use tracing::{debug, error, info};
 
 use voiceapp_protocol::{PacketId, ParticipantInfo};
-use crate::voice_encoder::{VoiceEncoder, OPUS_FRAME_SAMPLES};
-use crate::voice_decoder::VoiceDecoder;
+use crate::voice_codec::{VoiceCodec, OPUS_FRAME_SAMPLES};
 
 /// Errors that can occur with VoiceClient
 #[derive(Debug, Clone)]
@@ -281,10 +280,10 @@ impl VoiceClient {
     fn spawn_voice_transmitter(&self, voice_input_rx: mpsc::UnboundedReceiver<Vec<f32>>, udp_send_tx: mpsc::UnboundedSender<Vec<u8>>) {
         tokio::spawn(async move {
             let mut rx = voice_input_rx;
-            let mut encoder = match VoiceEncoder::new() {
-                Ok(enc) => enc,
+            let mut codec = match VoiceCodec::new() {
+                Ok(c) => c,
                 Err(e) => {
-                    error!("Failed to create voice encoder: {}", e);
+                    error!("Failed to create voice codec: {}", e);
                     return;
                 }
             };
@@ -300,7 +299,7 @@ impl VoiceClient {
                 while sample_buffer.len() >= OPUS_FRAME_SAMPLES {
                     let frame: Vec<f32> = sample_buffer.drain(0..OPUS_FRAME_SAMPLES).collect();
 
-                    match encoder.encode(&frame) {
+                    match codec.encode(&frame) {
                         Ok(Some(packet)) => {
                             let encoded = voiceapp_protocol::encode_voice_data(&packet);
                             if let Err(e) = udp_send_tx.send(encoded) {
@@ -323,7 +322,7 @@ impl VoiceClient {
             // Encode and send any remaining samples
             if !sample_buffer.is_empty() {
                 debug!("Encoding {} remaining samples", sample_buffer.len());
-                match encoder.encode(&sample_buffer) {
+                match codec.encode(&sample_buffer) {
                     Ok(Some(packet)) => {
                         let encoded = voiceapp_protocol::encode_voice_data(&packet);
                         if let Err(e) = udp_send_tx.send(encoded) {
@@ -530,7 +529,7 @@ async fn udp_handler(
     voice_output_tx: broadcast::Sender<Vec<f32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut read_buf = [0u8; 4096];
-    let mut decoder = VoiceDecoder::new()?;
+    let mut codec = VoiceCodec::new()?;
 
     loop {
         tokio::select! {
@@ -554,7 +553,7 @@ async fn udp_handler(
                 // Decode voice data packets
                 if packet_id == PacketId::VoiceData {
                     if let Ok(voice_packet) = voiceapp_protocol::decode_voice_data(&payload) {
-                        match decoder.decode_frame(&voice_packet.opus_frame) {
+                        match codec.decode(&voice_packet.opus_frame) {
                             Ok(pcm_samples) => {
                                 let _ = voice_output_tx.send(pcm_samples);
                             }

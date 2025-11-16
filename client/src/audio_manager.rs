@@ -7,9 +7,10 @@ use std::sync::{Arc, Mutex};
 use crate::audio::create_input_stream;
 use crate::output::{create_output_stream, AudioOutputHandle};
 
-/// Audio manager that handles recording lifecycle and voice data transmission
+/// Audio manager that handles recording and playback lifecycle
 pub struct AudioManager {
     voice_input_tx: mpsc::UnboundedSender<Vec<f32>>,
+    voice_output_rx: broadcast::Receiver<Vec<f32>>,
     input_stream: Arc<Mutex<Option<Stream>>>,
     input_receiver_task: Arc<Mutex<Option<JoinHandle<()>>>>,
     output_handle: Arc<Mutex<Option<AudioOutputHandle>>>,
@@ -17,10 +18,11 @@ pub struct AudioManager {
 }
 
 impl AudioManager {
-    /// Create a new AudioManager with a voice input sender
-    pub fn new(voice_input_tx: mpsc::UnboundedSender<Vec<f32>>) -> Self {
+    /// Create a new AudioManager with voice input sender and output receiver
+    pub fn new(voice_input_tx: mpsc::UnboundedSender<Vec<f32>>, voice_output_rx: broadcast::Receiver<Vec<f32>>) -> Self {
         AudioManager {
             voice_input_tx,
+            voice_output_rx,
             input_stream: Arc::new(Mutex::new(None)),
             input_receiver_task: Arc::new(Mutex::new(None)),
             output_handle: Arc::new(Mutex::new(None)),
@@ -76,7 +78,7 @@ impl AudioManager {
     }
 
     /// Start playing audio output from decoded voice stream
-    pub async fn start_playback(&self, voice_output_rx: broadcast::Receiver<Vec<f32>>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn start_playback(&self) -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting audio playback");
 
         // Create the output stream
@@ -84,14 +86,14 @@ impl AudioManager {
         let output_sender = output_handle.sender();
 
         // Spawn a task to read from voice output and send to playback
+        // Note: The output stream will handle mono-to-stereo conversion if the device is 2-channel
+        let voice_output_rx = self.voice_output_rx.resubscribe();
         let task = tokio::spawn(async move {
             let mut rx = voice_output_rx;
             loop {
                 match rx.recv().await {
                     Ok(pcm_samples) => {
-                        // Convert mono to stereo for playback
-                        let stereo_samples = voiceapp_sdk::mono_to_stereo(&pcm_samples);
-                        if let Err(e) = output_sender.send(stereo_samples) {
+                        if let Err(e) = output_sender.send(pcm_samples) {
                             error!("Failed to send audio to playback: {}", e);
                             break;
                         }

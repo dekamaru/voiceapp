@@ -85,7 +85,7 @@ fn get_stream_config(device: &Device) -> Result<(StreamConfig, SampleFormat), Bo
 }
 
 /// Convert stereo to mono by averaging channels (F32)
-fn stereo_to_mono_f32(stereo: &[f32], channels: u16) -> Vec<f32> {
+fn stereo_to_mono(stereo: &[f32], channels: u16) -> Vec<f32> {
     if channels == 1 {
         return stereo.to_vec();
     }
@@ -129,7 +129,7 @@ pub fn create_input_stream() -> Result<(Stream, mpsc::Receiver<AudioFrame>), Box
             device.build_input_stream(
                 &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    let mono_samples = stereo_to_mono_f32(data, channels);
+                    let mono_samples = stereo_to_mono(data, channels);
                     // Use try_send() to NEVER block the audio callback
                     // Dropping frames is better than blocking the audio system
                     if let Err(_) = tx.try_send(mono_samples) {
@@ -152,7 +152,7 @@ pub fn create_input_stream() -> Result<(Stream, mpsc::Receiver<AudioFrame>), Box
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     // Convert i16 to f32 in [-1.0, 1.0] range
                     let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
-                    let mono_samples = stereo_to_mono_f32(&f32_data, channels);
+                    let mono_samples = stereo_to_mono(&f32_data, channels);
                     // Use try_send() to NEVER block the audio callback
                     if let Err(_) = tx.try_send(mono_samples) {
                         let dropped = dropped_frames.fetch_add(1, Ordering::Relaxed);
@@ -177,7 +177,7 @@ pub fn create_input_stream() -> Result<(Stream, mpsc::Receiver<AudioFrame>), Box
                         .iter()
                         .map(|&s| (s as f32 / 32768.0) - 1.0)
                         .collect();
-                    let mono_samples = stereo_to_mono_f32(&f32_data, channels);
+                    let mono_samples = stereo_to_mono(&f32_data, channels);
                     // Use try_send() to NEVER block the audio callback
                     if let Err(_) = tx.try_send(mono_samples) {
                         let dropped = dropped_frames.fetch_add(1, Ordering::Relaxed);

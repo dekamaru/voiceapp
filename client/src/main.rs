@@ -65,13 +65,9 @@ async fn run_client(username: &str, management_server_addr: &str, voice_server_a
 
     // Create AudioManager with SDK's voice input sender and output receiver
     let voice_input_tx = client.voice_input_sender();
+    // Note: voice_output_receiver() consumes the client, so we must call it after extracting voice_input_tx
     let voice_output_rx = client.voice_output_receiver();
-    let audio_manager = AudioManager::new(voice_input_tx);
-
-    // Start audio playback
-    if let Err(e) = audio_manager.start_playback(voice_output_rx).await {
-        error!("Failed to start audio playback: {}", e);
-    }
+    let audio_manager = AudioManager::new(voice_input_tx, voice_output_rx);
 
     // Create channel for stdin commands
     let (tx, mut rx) = mpsc::channel::<String>(32);
@@ -98,6 +94,11 @@ async fn run_client(username: &str, management_server_addr: &str, voice_server_a
                         UserCommand::Join => {
                             match client.join_channel().await {
                                 Ok(_) => {
+                                    // Start audio playback
+                                    if let Err(e) = audio_manager.start_playback().await {
+                                        error!("Failed to start audio playback: {}", e);
+                                    }
+
                                     if let Err(e) = audio_manager.start_recording().await {
                                         error!("Failed to start recording: {}", e);
                                     }
