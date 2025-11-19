@@ -8,3 +8,4 @@ voiceapp-protocol = { path = "../protocol" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 opus = "0.3"
+neteq = "0.7.1"

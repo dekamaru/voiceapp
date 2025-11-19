@@ -6,7 +6,8 @@ use tokio::sync::{mpsc, broadcast, RwLock};
 use tracing::{debug, error, info};
 
 use voiceapp_protocol::{PacketId, ParticipantInfo};
-use crate::voice_codec::{VoiceCodec, OPUS_FRAME_SAMPLES};
+use crate::voice_encoder::{VoiceEncoder, OPUS_FRAME_SAMPLES};
+use crate::voice_decoder::VoiceDecoder;
 
 /// Errors that can occur with VoiceClient
 #[derive(Debug, Clone)]
@@ -280,7 +281,7 @@ impl VoiceClient {
     fn spawn_voice_transmitter(&self, voice_input_rx: mpsc::UnboundedReceiver<Vec<f32>>, udp_send_tx: mpsc::UnboundedSender<Vec<u8>>) {
         tokio::spawn(async move {
             let mut rx = voice_input_rx;
-            let mut codec = match VoiceCodec::new() {
+            let mut codec = match VoiceEncoder::new() {
                 Ok(c) => c,
                 Err(e) => {
                     error!("Failed to create voice codec: {}", e);
@@ -529,14 +530,14 @@ async fn udp_handler(
     voice_output_tx: broadcast::Sender<Vec<f32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut read_buf = [0u8; 4096];
-    let mut codec = VoiceCodec::new()?;
+    let decoder = VoiceDecoder::new(voice_output_tx)?;
 
     loop {
         tokio::select! {
             // Handle outgoing packets
             Some(packet) = send_rx.recv() => {
                 socket.send(&packet).await?;
-                debug!("Sent UDP packet: {} bytes", packet.len());
+                // TODO: packet.len() for bytes sent
             }
 
             // Handle incoming packets
@@ -548,18 +549,14 @@ async fn udp_handler(
 
                 // Parse incoming packet
                 let (packet_id, payload) = voiceapp_protocol::parse_packet(&read_buf[..n])?;
-                debug!("Received UDP packet: {:?}", packet_id);
 
                 // Decode voice data packets
                 if packet_id == PacketId::VoiceData {
                     if let Ok(voice_packet) = voiceapp_protocol::decode_voice_data(&payload) {
-                        match codec.decode(&voice_packet.opus_frame) {
-                            Ok(pcm_samples) => {
-                                let _ = voice_output_tx.send(pcm_samples);
-                            }
-                            Err(e) => {
-                                error!("Failed to decode voice frame: {}", e);
-                            }
+                        // Insert packet into NetEQ for jitter buffering and reordering
+                        // Timer loop in VoiceDecoder automatically pulls audio every 10ms
+                        if let Err(e) = decoder.insert_packet(voice_packet).await {
+                            debug!("Failed to insert voice packet: {}", e);
                         }
                     }
                 } else {

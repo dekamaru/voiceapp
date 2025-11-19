@@ -1,36 +1,34 @@
-use opus::{Channels, Encoder, Decoder};
+use opus::{Channels, Encoder, Bitrate};
 use voiceapp_protocol::VoiceData;
-use tracing::debug;
 
 pub const SAMPLE_RATE: u32 = 48000;
 pub const OPUS_FRAME_SAMPLES: usize = 960; // 20ms at 48kHz
 
+// TODO: variable to play with!
+const ENCODING_BITRATE: i32 = 96000; // 96 kbps
+
 /// Manages both Opus encoding and decoding of voice packets
-pub struct VoiceCodec {
+pub struct VoiceEncoder {
     encoder: Encoder,
-    decoder: Decoder,
     pub sequence: u32,
     pub timestamp: u32,
 }
 
-impl VoiceCodec {
+impl VoiceEncoder {
     /// Create a new voice codec
-    pub fn new() -> Result<Self, opus::Error> {
-        let encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, opus::Application::Voip)?;
-        let decoder = Decoder::new(SAMPLE_RATE, Channels::Mono)?;
+    pub fn new() -> Result<Self, String> {
+        let mut encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, opus::Application::Voip)
+            .map_err(|e| format!("opus error: {}", e.to_string()))?;
 
-        // Set encoding parameters
-        let mut codec = VoiceCodec {
-            encoder,
-            decoder,
-            sequence: 0,
-            timestamp: 0,
-        };
+        encoder.set_bitrate(Bitrate::Bits(ENCODING_BITRATE)).unwrap();
 
-        // Configure encoder
-        codec.encoder.set_bitrate(opus::Bitrate::Max)?;
-
-        Ok(codec)
+        Ok(
+            VoiceEncoder {
+                encoder,
+                sequence: 0,
+                timestamp: 0,
+            }
+        )
     }
 
     /// Encode audio samples to Opus format
@@ -64,21 +62,5 @@ impl VoiceCodec {
         self.timestamp = self.timestamp.wrapping_add(OPUS_FRAME_SAMPLES as u32);
 
         Ok(Some(packet))
-    }
-
-    /// Decode Opus frame to PCM samples
-    pub fn decode(&mut self, opus_frame: &[u8]) -> Result<Vec<f32>, String> {
-        // Allocate output buffer for max frame size
-        let mut pcm_out = vec![0.0f32; OPUS_FRAME_SAMPLES];
-
-        let samples_decoded = self.decoder
-            .decode_float(opus_frame, &mut pcm_out, false)
-            .map_err(|e| format!("Failed to decode Opus frame: {:?}", e))?;
-
-        pcm_out.truncate(samples_decoded);
-
-        debug!("Decoded {} bytes to {} samples", opus_frame.len(), samples_decoded);
-
-        Ok(pcm_out)
     }
 }
