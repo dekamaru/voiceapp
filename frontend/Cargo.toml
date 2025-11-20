@@ -1,0 +1,11 @@
+[package]
+name = "voiceapp-frontend"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "voiceapp-frontend"
+path = "src/main.rs"
+
+[dependencies]
+iced = "0.13.1"
