@@ -63,11 +63,10 @@ async fn run_client(username: &str, management_server_addr: &str, voice_server_a
     info!("Authenticated as '{}'", username);
     info!("Type 'join' to join voice channel, 'leave' to stop, or 'help' for commands");
 
-    // Create AudioManager with SDK's voice input sender and output receiver
+    // Create AudioManager with SDK's voice input sender and decoder
     let voice_input_tx = client.voice_input_sender();
-    // Note: voice_output_receiver() consumes the client, so we must call it after extracting voice_input_tx
-    let voice_output_rx = client.voice_output_receiver();
-    let audio_manager = AudioManager::new(voice_input_tx, voice_output_rx);
+    let decoder = client.get_decoder();
+    let audio_manager = AudioManager::new(voice_input_tx, decoder);
 
     // Create channel for stdin commands
     let (tx, mut rx) = mpsc::channel::<String>(32);

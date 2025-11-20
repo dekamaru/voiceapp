@@ -46,7 +46,7 @@ pub struct VoiceClient {
     response_rx: mpsc::UnboundedReceiver<(PacketId, Vec<u8>)>,
     event_rx: broadcast::Receiver<(PacketId, Vec<u8>)>,
     voice_input_tx: mpsc::UnboundedSender<Vec<f32>>,
-    voice_output_rx: broadcast::Receiver<Vec<f32>>,
+    decoder: Arc<VoiceDecoder>,
     udp_send_tx: mpsc::UnboundedSender<Vec<u8>>,
     udp_recv_rx: mpsc::UnboundedReceiver<(PacketId, Vec<u8>)>,
 }
@@ -59,7 +59,12 @@ impl VoiceClient {
         let (event_tx, _) = broadcast::channel(100);
         let event_rx = event_tx.subscribe();
         let (voice_input_tx, voice_input_rx) = mpsc::unbounded_channel();
-        let (voice_output_tx, voice_output_rx) = broadcast::channel(100);
+
+        // Create decoder
+        let decoder = Arc::new(
+            VoiceDecoder::new()
+                .map_err(|e| VoiceClientError::SystemError(e.to_string()))?
+        );
 
         // Create UDP channels
         let (udp_send_tx, udp_send_rx) = mpsc::unbounded_channel();
@@ -77,7 +82,7 @@ impl VoiceClient {
             response_rx,
             event_rx,
             voice_input_tx,
-            voice_output_rx,
+            decoder: decoder.clone(),
             udp_send_tx: udp_send_tx.clone(),
             udp_recv_rx,
         };
@@ -103,7 +108,7 @@ impl VoiceClient {
 
         // Spawn background tasks
         client.spawn_tcp_handler(tcp_socket, request_rx, response_tx, event_tx);
-        client.spawn_udp_handler(udp_socket, udp_send_rx, udp_recv_tx, voice_output_tx);
+        client.spawn_udp_handler(udp_socket, udp_send_rx, udp_recv_tx, decoder.clone());
         client.spawn_event_processor();
         client.spawn_voice_transmitter(voice_input_rx, udp_send_tx.clone());
 
@@ -247,8 +252,8 @@ impl VoiceClient {
 
     /// Get a receiver for decoded voice output (mono F32 PCM samples at 48kHz)
     /// Subscribe to incoming voice from other participants
-    pub fn voice_output_receiver(&self) -> broadcast::Receiver<Vec<f32>> {
-        self.voice_output_rx.resubscribe()
+    pub fn get_decoder(&self) -> Arc<VoiceDecoder> {
+        self.decoder.clone()
     }
 
     /// Spawn event processor task (called internally from connect)
@@ -364,10 +369,10 @@ impl VoiceClient {
         socket: UdpSocket,
         send_rx: mpsc::UnboundedReceiver<Vec<u8>>,
         recv_tx: mpsc::UnboundedSender<(PacketId, Vec<u8>)>,
-        voice_output_tx: broadcast::Sender<Vec<f32>>,
+        decoder: Arc<VoiceDecoder>,
     ) {
         tokio::spawn(async move {
-            if let Err(e) = udp_handler(socket, send_rx, recv_tx, voice_output_tx).await {
+            if let Err(e) = udp_handler(socket, send_rx, recv_tx, decoder).await {
                 error!("UDP handler error: {}", e);
             }
         });
@@ -527,10 +532,9 @@ async fn udp_handler(
     socket: UdpSocket,
     mut send_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     recv_tx: mpsc::UnboundedSender<(PacketId, Vec<u8>)>,
-    voice_output_tx: broadcast::Sender<Vec<f32>>,
+    decoder: Arc<VoiceDecoder>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut read_buf = [0u8; 4096];
-    let decoder = VoiceDecoder::new(voice_output_tx)?;
 
     loop {
         tokio::select! {
@@ -554,7 +558,7 @@ async fn udp_handler(
                 if packet_id == PacketId::VoiceData {
                     if let Ok(voice_packet) = voiceapp_protocol::decode_voice_data(&payload) {
                         // Insert packet into NetEQ for jitter buffering and reordering
-                        // Timer loop in VoiceDecoder automatically pulls audio every 10ms
+                        // CPAL callback will pull audio on-demand via get_audio()
                         if let Err(e) = decoder.insert_packet(voice_packet).await {
                             debug!("Failed to insert voice packet: {}", e);
                         }

@@ -84,9 +84,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     const FRAME_SIZE: usize = 960; // 20ms at 48kHz
     const FRAME_DURATION_MS: u64 = 20;
     let stream_start = Instant::now();
-    let mut frame_count = 0u64;
 
-    for chunk in samples.chunks(FRAME_SIZE) {
+    for (frame_idx, chunk) in samples.chunks(FRAME_SIZE).enumerate() {
+        // Calculate exact time this frame should be sent
+        let frame_send_time = stream_start + Duration::from_millis(frame_idx as u64 * FRAME_DURATION_MS);
+
+        // Sleep until the exact time this frame should be sent
+        let now = Instant::now();
+        if frame_send_time > now {
+            sleep(frame_send_time - now).await;
+        }
+
         // Convert i16 samples to f32 in range [-1.0, 1.0]
         let float_frame: Vec<f32> = chunk
             .iter()
@@ -96,19 +104,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if voice_input_tx.send(float_frame).is_err() {
             info!("Voice input channel closed, stopping stream");
             break;
-        }
-
-        frame_count += 1;
-
-        // Calculate when this frame should have been sent based on elapsed time
-        // This adapts to any processing delays automatically
-        let expected_elapsed = Duration::from_millis(frame_count * FRAME_DURATION_MS);
-        let actual_elapsed = stream_start.elapsed();
-
-        // Sleep to maintain real-time timing: if we're ahead, sleep; if behind, skip sleep
-        if actual_elapsed < expected_elapsed {
-            let sleep_duration = expected_elapsed - actual_elapsed;
-            sleep(sleep_duration).await;
         }
     }
 

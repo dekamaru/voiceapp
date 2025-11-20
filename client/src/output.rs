@@ -1,27 +1,14 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig, SampleRate, SampleFormat};
-use std::sync::mpsc;
-use tracing::{debug, error, info};
-use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
+use tracing::{debug, error, info, warn};
+use std::sync::Arc;
+use voiceapp_sdk::VoiceDecoder;
 
 const TARGET_SAMPLE_RATE: u32 = 48000;
-const OUTPUT_BUFFER_CAPACITY: usize = 48000; // ~500ms at 48kHz for continuous sample buffer
-
-/// Audio frame for playback: stereo F32 samples at 48kHz
-pub type PlaybackFrame = Vec<f32>;
 
 /// Handle to manage audio output stream for a single user
 pub struct AudioOutputHandle {
     _stream: Stream, // kept alive to maintain audio stream
-    sender: mpsc::Sender<PlaybackFrame>,
-}
-
-impl AudioOutputHandle {
-    /// Get sender to queue audio frames for playback
-    pub fn sender(&self) -> mpsc::Sender<PlaybackFrame> {
-        self.sender.clone()
-    }
 }
 
 /// Find and validate output device
@@ -98,125 +85,68 @@ fn get_stream_config(device: &Device) -> Result<(StreamConfig, SampleFormat), Bo
 }
 
 /// Create output stream for playing back audio from a specific user
-pub fn create_output_stream() -> Result<AudioOutputHandle, Box<dyn std::error::Error>> {
+pub fn create_output_stream(decoder: Arc<VoiceDecoder>) -> Result<AudioOutputHandle, Box<dyn std::error::Error>> {
     debug!("Creating output stream...");
     let device = find_output_device()?;
-    let (config, format) = get_stream_config(&device)?;
-    let channels = config.channels;
+    let (mut config, format) = get_stream_config(&device)?;
+
+    // Set buffer size to 10ms (480 samples at 48kHz) to match NetEQ output frame size
+    const BUFFER_SIZE_MS: u32 = 10;
+    let frames_per_buffer = (TARGET_SAMPLE_RATE / 1000) * BUFFER_SIZE_MS;  // 480 samples
+    config.buffer_size = cpal::BufferSize::Fixed(frames_per_buffer);
+    config.channels = 1;
 
     info!(
-        "Output stream config: {} channels, {} Hz, format: {:?}",
-        config.channels, config.sample_rate.0, format
+        "Output stream config: {} channels, {} Hz, format: {:?}, buffer: {} samples ({} ms)",
+        config.channels, config.sample_rate.0, format, frames_per_buffer, BUFFER_SIZE_MS
     );
 
-    let (tx, rx) = mpsc::channel::<PlaybackFrame>();
-
-    // Use a continuous sample buffer (VecDeque) instead of frame-based delivery
-    // This handles variable cpal callback sizes and prevents timing misalignment
-    let sample_buffer = Arc::new(Mutex::new(VecDeque::<f32>::with_capacity(OUTPUT_BUFFER_CAPACITY)));
-
-    // Spawn task to receive frames and feed them into the sample buffer
-    // Convert mono to stereo if needed based on device channel count
-    let sample_buffer_clone = sample_buffer.clone();
-    tokio::spawn(async move {
-        while let Ok(frame) = rx.recv() {
-            let mut buffer = sample_buffer_clone.lock().unwrap();
-
-            // Convert mono to stereo if device has 2 channels
-            let audio_data = if channels == 2 {
-                mono_to_stereo(&frame)
-            } else {
-                frame
-            };
-
-            buffer.extend(audio_data.iter().cloned());
-
-            // Log if buffer is getting full
-            if buffer.len() > OUTPUT_BUFFER_CAPACITY * 90 / 100 {
-                debug!("Output buffer near capacity: {} samples", buffer.len());
-            }
-        }
-    });
+    let volume = 1.0f32;
+    let err_fn = |e| error!("Stream error: {}", e);
 
     // Build stream matching the format
     let stream = match format {
         SampleFormat::F32 => {
-            let sample_buffer = sample_buffer.clone();
+            let mut leftover: Vec<f32> = Vec::new();
+            let decoder_clone = decoder.clone();
             device.build_output_stream(
                 &config,
                 move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    let mut buffer = sample_buffer.lock().unwrap();
-
-                    // Fill output buffer sample by sample from the VecDeque
-                    for sample in output.iter_mut() {
-                        if let Some(s) = buffer.pop_front() {
-                            *sample = s;
-                        } else {
-                            // No more samples available, fill with silence
-                            *sample = 0.0;
-                        }
-                    }
+                    fill_output(output, &decoder_clone, &mut leftover, volume);
                 },
-                move |err| {
-                    error!("Output stream error: {}", err);
-                },
+                err_fn,
                 None,
             )?
         }
         SampleFormat::I16 => {
-            let sample_buffer = sample_buffer.clone();
+            let mut leftover: Vec<f32> = Vec::new();
+            let decoder_clone = decoder.clone();
             device.build_output_stream(
                 &config,
                 move |output: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    let mut buffer = sample_buffer.lock().unwrap();
-
-                    // Fill output buffer sample by sample from the VecDeque
-                    let mut filled = 0;
-                    for sample in output.iter_mut() {
-                        if let Some(s) = buffer.pop_front() {
-                            *sample = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                            filled += 1;
-                        } else {
-                            *sample = 0;
-                        }
-                    }
-
-                    if filled < output.len() {
-                        debug!("Output callback: buffer underrun, filled {}/{} samples", filled, output.len());
+                    let mut tmp = vec![0.0f32; output.len()];
+                    fill_output(&mut tmp, &decoder_clone, &mut leftover, volume);
+                    for (o, &v) in output.iter_mut().zip(tmp.iter()) {
+                        *o = (v.clamp(-1.0, 1.0) * 32767.0) as i16;
                     }
                 },
-                move |err| {
-                    error!("Output stream error: {}", err);
-                },
+                err_fn,
                 None,
             )?
         }
         SampleFormat::U16 => {
-            let sample_buffer = sample_buffer.clone();
+            let mut leftover: Vec<f32> = Vec::new();
+            let decoder_clone = decoder.clone();
             device.build_output_stream(
                 &config,
                 move |output: &mut [u16], _: &cpal::OutputCallbackInfo| {
-                    let mut buffer = sample_buffer.lock().unwrap();
-
-                    // Fill output buffer sample by sample from the VecDeque
-                    let mut filled = 0;
-                    for sample in output.iter_mut() {
-                        if let Some(s) = buffer.pop_front() {
-                            let val = ((s + 1.0) * 32768.0).clamp(0.0, 65535.0) as u16;
-                            *sample = val;
-                            filled += 1;
-                        } else {
-                            *sample = 32768;
-                        }
-                    }
-
-                    if filled < output.len() {
-                        debug!("Output callback: buffer underrun, filled {}/{} samples", filled, output.len());
+                    let mut tmp = vec![0.0f32; output.len()];
+                    fill_output(&mut tmp, &decoder_clone, &mut leftover, volume);
+                    for (o, &v) in output.iter_mut().zip(tmp.iter()) {
+                        *o = ((v.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16;
                     }
                 },
-                move |err| {
-                    error!("Output stream error: {}", err);
-                },
+                err_fn,
                 None,
             )?
         }
@@ -227,20 +157,53 @@ pub fn create_output_stream() -> Result<AudioOutputHandle, Box<dyn std::error::E
 
     // Start the stream
     stream.play()?;
-    debug!("Output stream started with continuous sample buffer");
+    debug!("Output stream started");
 
     Ok(AudioOutputHandle {
         _stream: stream,
-        sender: tx,
     })
 }
 
-/// Convert mono audio to stereo by duplicating channels
-fn mono_to_stereo(mono: &[f32]) -> Vec<f32> {
-    let mut stereo = Vec::with_capacity(mono.len() * 2);
-    for &sample in mono {
-        stereo.push(sample);
-        stereo.push(sample); // Duplicate to stereo
+fn fill_output(
+    buffer: &mut [f32],
+    decoder: &Arc<VoiceDecoder>,
+    leftover: &mut Vec<f32>,
+    volume: f32,
+) {
+    let mut idx = 0;
+
+    while idx < buffer.len() {
+        if leftover.is_empty() {
+            match decoder.get_audio() {
+                Ok(frame) => {
+                    leftover.extend_from_slice(&frame);
+                }
+                Err(e) => {
+                    warn!("BUFFER UNDERRUN: get_audio error: {e:?}");
+                    // fill silence
+                    for s in &mut buffer[idx..] {
+                        *s = 0.0;
+                    }
+                    break;
+                }
+            }
+        }
+
+        let n = std::cmp::min(leftover.len(), buffer.len() - idx);
+        if n == 0 {
+            warn!("BUFFER UNDERRUN: No audio data available, filling with silence");
+            for s in &mut buffer[idx..] {
+                *s = 0.0;
+            }
+            break;
+        }
+
+        // Copy samples and apply volume scaling
+        for i in 0..n {
+            buffer[idx + i] = leftover[i] * volume;
+        }
+
+        leftover.drain(..n);
+        idx += n;
     }
-    stereo
 }
