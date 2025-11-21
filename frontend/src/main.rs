@@ -4,7 +4,7 @@ use iced::border::Radius;
 use iced::font::Family;
 use iced::Theme::Dark;
 use iced::theme::Palette;
-use iced::widget::{container, row, column, vertical_rule, rule, text, Space, button, horizontal_rule, text_input, Button};
+use iced::widget::{container, row, column, vertical_rule, rule, text, Space, button, horizontal_rule, text_input, Button, stack};
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
 
@@ -34,7 +34,8 @@ enum Message {
 struct Application {
     voice_url: String,
     username: String,
-    login_valid: bool,
+    form_filled: bool,
+    login_error: String,
 }
 
 impl Application {
@@ -42,23 +43,25 @@ impl Application {
         match message {
             Message::VoiceUrlChanged(content) => {
                 self.voice_url = content;
-                self.login_valid = self.is_login_valid()
+                self.form_filled = self.is_form_filled()
             }
             Message::UsernameChanged(content) => {
                 self.username = content;
-                self.login_valid = self.is_login_valid()
+                self.form_filled = self.is_form_filled()
             }
             Message::LoginSubmitted => {
-                if !self.login_valid {
+                if !self.form_filled {
                     return
                 }
+
+                self.login_error = "not implemented".to_string();
 
                 println!("login submitted");
             }
         }
     }
 
-    fn is_login_valid(&self) -> bool {
+    fn is_form_filled(&self) -> bool {
         !self.username.is_empty() && !self.voice_url.is_empty()
     }
 
@@ -67,7 +70,7 @@ impl Application {
         //Self::main_screen().into()
     }
 
-    fn login_screen(&self) -> iced::widget::Container<Message> {
+    fn login_screen(&self) -> iced::widget::Stack<Message> {
         let bold = Font {
             weight: font::Weight::ExtraBold,
             ..Font::DEFAULT
@@ -77,21 +80,29 @@ impl Application {
         let form = container(
             column!(
                 self.input("Voice server IP", &mut self.voice_url.clone(), Message::VoiceUrlChanged, Message::LoginSubmitted),
-                self.input_with_submit("Username", &mut self.username.clone(), Message::UsernameChanged, &mut self.login_valid.clone(), Message::LoginSubmitted)
+                self.input_with_submit("Username", &mut self.username.clone(), Message::UsernameChanged, &mut self.form_filled.clone(), Message::LoginSubmitted)
             ).spacing(8)
         );
 
-        let window_area = container(column!(
-            text!("Voiceapp").size(32).font(bold),
-            form
-        ).spacing(32).align_x(Horizontal::Center));
+        let login_form = column!(
+          Space::with_height(Length::Fill),
+          text!("Voiceapp").size(32).font(bold),
+          form,
+          Space::with_height(Length::Fill),
+      )
+            .spacing(32)
+            .align_x(Horizontal::Center)
+            .width(Length::Fill)
+            .height(Length::Fill);
 
-        container(window_area)
-            .padding(4)
+        let error_area = container(text(self.login_error.clone()).color(Color::from_rgb8(228, 66, 69)))
+            .align_y(Vertical::Bottom)
+            .align_x(Horizontal::Center)
             .width(Length::Fill)
             .height(Length::Fill)
-            .align_x(Horizontal::Center)
-            .align_y(Vertical::Center)
+            .padding(32);
+
+        stack!(error_area, login_form).width(Length::Fill).height(Length::Fill)
     }
 
     fn main_screen<'a>() -> iced::widget::Container<'a, Message> {
