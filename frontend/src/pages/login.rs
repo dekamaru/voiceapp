@@ -1,3 +1,4 @@
+use std::time::Duration;
 use iced::{border, font, Background, Border, Color, Element, Font, Length, Padding, Task};
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Family, Weight};
@@ -16,7 +17,6 @@ pub struct LoginPage {
     username: String,
     form_filled: bool,
     login_error: String,
-    client: Option<VoiceClient>
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +24,7 @@ pub enum LoginPageMessage {
     VoiceUrlChanged(String),
     UsernameChanged(String),
     LoginSubmitted,
+    TestMessage,
 }
 
 impl Into<Message> for LoginPageMessage {
@@ -167,7 +168,7 @@ impl LoginPage {
 }
 
 impl Page for LoginPage {
-    fn update(&mut self, message: Message) -> Option<Box<dyn Page>> {
+    fn update(&mut self, message: Message) -> Task<Message> {
         if let Message::LoginPage(msg) = message {
             match msg {
                 LoginPageMessage::VoiceUrlChanged(content) => {
@@ -180,13 +181,19 @@ impl Page for LoginPage {
                 }
                 LoginPageMessage::LoginSubmitted => {
                     if self.form_filled {
+                        return Task::perform(tokio::time::sleep(Duration::from_millis(5000)), |_| {
+                            LoginPageMessage::TestMessage.into()
+                        })
                         //self.login_error = "not implemented".to_string();
-                        return Some(Box::new(RoomPage::new()))
+                        //return Some(Box::new(RoomPage::new()))
                     }
                 },
+                LoginPageMessage::TestMessage => {
+                    println!("task done")
+                }
             }
         }
-        None
+        Task::none()
     }
 
     fn view(&self) -> Element<'_, Message> {

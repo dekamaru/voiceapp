@@ -1,4 +1,4 @@
-use iced::{border, font, Alignment, Background, Border, Color, Element, Font, Length, Padding, Theme};
+use iced::{border, font, Alignment, Background, Border, Color, Element, Font, Length, Padding, Task, Theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::border::Radius;
 use iced::font::Family;
@@ -225,7 +225,7 @@ impl RoomPage {
 }
 
 impl Page for RoomPage {
-    fn update(&mut self, message: Message) -> Option<Box<dyn Page>> {
+    fn update(&mut self, message: Message) -> Task<Message> {
         if let Message::RoomPage(msg) = message {
             match msg {
                 RoomPageMessage::MuteToggle => {
@@ -237,7 +237,7 @@ impl Page for RoomPage {
             }
         }
 
-        None
+        Task::none()
     }
 
     fn view(&self) -> Element<'_, Message> {

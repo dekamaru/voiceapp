@@ -13,6 +13,7 @@ use colors::*;
 use pages::login::LoginPageMessage;
 use pages::login::LoginPage;
 use pages::room::RoomPageMessage;
+use voiceapp_sdk::{voice_client, VoiceClient};
 use crate::pages::room::RoomPage;
 
 fn main() -> iced::Result {
@@ -42,29 +43,29 @@ enum Message {
 }
 
 trait Page {
-    fn update(&mut self, message: Message) -> Option<Box<dyn Page>>;
+    fn update(&mut self, message: Message) -> Task<Message>;
     fn view(&self) -> iced::Element<'_, Message>;
 }
 
 struct Application {
-    page: Box<dyn Page>
+    page: Box<dyn Page>,
+    voice_client: VoiceClient,
 }
 
 impl Application {
     fn new() -> (Self, Task<Message>) {
+        let voice_client = VoiceClient::new().expect("failed to init voice client");
         (
             Self {
-                page: Box::new(RoomPage::new()),
+                page: Box::new(LoginPage::new()),
+                voice_client,
             },
             Task::none()
         )
     }
 
-    fn update(&mut self, message: Message) {
-        let page = self.page.update(message);
-        if let Some(p) = page {
-            self.page = p;
-        }
+    fn update(&mut self, message: Message) -> Task<Message> {
+        self.page.update(message)
     }
 
     fn view(&self) -> iced::Element<Message> {
