@@ -1,4 +1,5 @@
 use std::time::Duration;
+use std::sync::Arc;
 use iced::{border, font, Background, Border, Color, Element, Font, Length, Padding, Task};
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Family, Weight};
@@ -10,6 +11,7 @@ use crate::colors::{color_error, container_bg, text_primary, text_secondary, tex
 use crate::icons::Icons;
 use crate::pages::room::RoomPage;
 use crate::widgets::Widgets;
+use crate::voice_messages::{VoiceCommand, VoiceCommandResult};
 
 #[derive(Default)]
 pub struct LoginPage {
@@ -23,8 +25,7 @@ pub struct LoginPage {
 pub enum LoginPageMessage {
     VoiceUrlChanged(String),
     UsernameChanged(String),
-    LoginSubmitted,
-    TestMessage,
+    LoginSubmitted
 }
 
 impl Into<Message> for LoginPageMessage {
@@ -169,29 +170,54 @@ impl LoginPage {
 
 impl Page for LoginPage {
     fn update(&mut self, message: Message) -> Task<Message> {
-        if let Message::LoginPage(msg) = message {
-            match msg {
-                LoginPageMessage::VoiceUrlChanged(content) => {
-                    self.voice_url = content;
-                    self.form_filled = self.is_form_filled()
-                }
-                LoginPageMessage::UsernameChanged(content) => {
-                    self.username = content;
-                    self.form_filled = self.is_form_filled()
-                }
-                LoginPageMessage::LoginSubmitted => {
-                    if self.form_filled {
-                        return Task::perform(tokio::time::sleep(Duration::from_millis(5000)), |_| {
-                            LoginPageMessage::TestMessage.into()
-                        })
-                        //self.login_error = "not implemented".to_string();
-                        //return Some(Box::new(RoomPage::new()))
+        match message {
+            Message::LoginPage(msg) => {
+                match msg {
+                    LoginPageMessage::VoiceUrlChanged(content) => {
+                        if !self.login_error.is_empty() {
+                            self.login_error.clear();
+                        }
+
+                        self.voice_url = content;
+                        self.form_filled = self.is_form_filled()
                     }
-                },
-                LoginPageMessage::TestMessage => {
-                    println!("task done")
+                    LoginPageMessage::UsernameChanged(content) => {
+                        if !self.login_error.is_empty() {
+                            self.login_error.clear();
+                        }
+
+                        self.username = content;
+                        self.form_filled = self.is_form_filled()
+                    }
+                    LoginPageMessage::LoginSubmitted => {
+                        if self.form_filled {
+                            // TODO: inputs should be blocked (buttons as well)
+                            // TODO: right now protocol defines participant info reused by management server + protocol + client.
+                            //  It should not be the case. Protocol should include usernames in login response.
+                            // TODO: connect() from voice client should return initial server state (participants)
+                            // TODO: subscription to events_rx from voice client, to update client state (concurrency might be an issue for initial state)
+                            return Task::done(
+                                Message::ExecuteVoiceCommand(VoiceCommand::Connect {
+                                    management_addr: format!("{}:9001", self.voice_url),
+                                    voice_addr: format!("{}:9002", self.voice_url),
+                                    username: self.username.clone(),
+                                })
+                            );
+                        }
+                    },
                 }
             }
+            Message::VoiceCommandResult(VoiceCommandResult::Connect(result)) => {
+                match result {
+                    Ok(()) => {
+                        println!("Connected to voice server!");
+                    }
+                    Err(err) => {
+                        self.login_error = err;
+                    }
+                }
+            }
+            _ => {}
         }
         Task::none()
     }

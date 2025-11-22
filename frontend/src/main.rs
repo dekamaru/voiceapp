@@ -3,11 +3,14 @@ use iced::application::Appearance;
 use iced::Theme::Dark;
 use iced::theme::Palette;
 use iced::window::settings::PlatformSpecific;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 mod icons;
 mod colors;
 mod pages;
 mod widgets;
+mod voice_messages;
 
 use colors::*;
 use pages::login::LoginPageMessage;
@@ -15,6 +18,7 @@ use pages::login::LoginPage;
 use pages::room::RoomPageMessage;
 use voiceapp_sdk::{voice_client, VoiceClient};
 use crate::pages::room::RoomPage;
+use voice_messages::{VoiceCommand, VoiceCommandResult};
 
 fn main() -> iced::Result {
     let theme = |_state: &Application| {
@@ -40,6 +44,8 @@ fn main() -> iced::Result {
 enum Message {
     LoginPage(LoginPageMessage),
     RoomPage(RoomPageMessage),
+    ExecuteVoiceCommand(VoiceCommand),
+    VoiceCommandResult(VoiceCommandResult),
 }
 
 trait Page {
@@ -49,7 +55,7 @@ trait Page {
 
 struct Application {
     page: Box<dyn Page>,
-    voice_client: VoiceClient,
+    voice_client: Arc<Mutex<VoiceClient>>,
 }
 
 impl Application {
@@ -58,14 +64,31 @@ impl Application {
         (
             Self {
                 page: Box::new(LoginPage::new()),
-                voice_client,
+                voice_client: Arc::new(Mutex::new(voice_client)),
             },
             Task::none()
         )
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
-        self.page.update(message)
+        match message {
+            Message::ExecuteVoiceCommand(VoiceCommand::Connect { management_addr, voice_addr, username }) => {
+                let client = self.voice_client.clone();
+
+                Task::perform(
+                    async move {
+                        let mut guard = client.lock().await;
+                        guard.connect(&management_addr, &voice_addr, &username).await
+                    },
+                    move |result| {
+                        Message::VoiceCommandResult(VoiceCommandResult::Connect(
+                            result.map_err(|e| e.to_string())
+                        ))
+                    }
+                )
+            }
+            other => self.page.update(other),
+        }
     }
 
     fn view(&self) -> iced::Element<Message> {
