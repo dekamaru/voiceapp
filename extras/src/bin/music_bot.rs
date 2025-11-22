@@ -69,13 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to voice server
     info!("Connecting to voice servers...");
     let mut client = VoiceClient::new()?;
-    client.connect(&server_addr, &voice_server_addr).await?;
+    client.connect(&server_addr, &voice_server_addr, "music_bot").await?;
     info!("Connected!");
-
-    // Authenticate
-    info!("Authenticating as 'music_bot'...");
-    client.authenticate("music_bot").await?;
-    info!("Authenticated!");
 
     // Get the voice input sender
     let voice_input_tx = client.voice_input_sender();

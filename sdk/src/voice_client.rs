@@ -101,7 +101,7 @@ impl VoiceClient {
         })
     }
 
-    pub async fn connect(&mut self, management_server_addr: &str, voice_server_addr: &str) -> Result<(), VoiceClientError> {
+    pub async fn connect(&mut self, management_server_addr: &str, voice_server_addr: &str, username: &str) -> Result<(), VoiceClientError> {
         // Connect TCP socket
         let tcp_socket = TcpStream::connect(management_server_addr)
             .await
@@ -137,10 +137,7 @@ impl VoiceClient {
         self.spawn_event_processor();
         self.spawn_voice_transmitter(self.voice_input_rx.clone(), self.udp_send_tx.clone());
 
-        Ok(())
-    }
-
-    pub async fn authenticate(&mut self, username: &str) -> Result<(), VoiceClientError> {
+        // Authenticate
         debug!("Authenticating as '{}'", username);
 
         // TCP authentication
@@ -264,11 +261,6 @@ impl VoiceClient {
 
         info!("Left voice channel");
         Ok(())
-    }
-
-    pub async fn get_user_id(&self) -> Result<Option<u64>, VoiceClientError> {
-        let state = self.state.read().await;
-        Ok(state.user_id)
     }
 
     /// Get a sender for raw voice samples (Vec<f32>)

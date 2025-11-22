@@ -108,6 +108,8 @@ impl AudioManager {
             }
         }
 
+        self.decoder.flush();
+
         info!("Audio playback stopped");
     }
 }

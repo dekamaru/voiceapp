@@ -77,4 +77,8 @@ impl VoiceDecoder {
             .map(|frame| frame.samples)
             .map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))
     }
+
+    pub fn flush(&self) {
+        self.neteq.lock().unwrap().flush();
+    }
 }

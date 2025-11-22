@@ -343,7 +343,6 @@ impl ManagementServer {
         };
 
         let _ = self.broadcast_tx.send(broadcast_msg);
-        let _ = self.disconnect_tx.send(user_id); // For UDP
 
         debug!("[{}] User left voice channel: id={}", peer_addr, user_id);
 

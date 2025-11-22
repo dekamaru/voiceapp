@@ -56,12 +56,8 @@ async fn main() {
 async fn run_client(username: &str, management_server_addr: &str, voice_server_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Create client and connect to voice server
     let mut client = VoiceClient::new()?;
-    client.connect(management_server_addr, voice_server_addr).await?;
+    client.connect(management_server_addr, voice_server_addr, username).await?;
     info!("Connected to voice server");
-
-    // Authenticate with the server
-    client.authenticate(username).await?;
-    info!("Authenticated as '{}'", username);
     info!("Type 'join' to join voice channel, 'leave' to stop, or 'help' for commands");
 
     // Create AudioManager with SDK's voice input sender and decoder
