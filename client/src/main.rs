@@ -54,8 +54,9 @@ async fn main() {
 }
 
 async fn run_client(username: &str, management_server_addr: &str, voice_server_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // Connect to voice server - all TCP/UDP setup is internal
-    let mut client = VoiceClient::connect(management_server_addr, voice_server_addr).await?;
+    // Create client and connect to voice server
+    let mut client = VoiceClient::new()?;
+    client.connect(management_server_addr, voice_server_addr).await?;
     info!("Connected to voice server");
 
     // Authenticate with the server

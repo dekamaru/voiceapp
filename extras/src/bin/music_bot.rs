@@ -68,7 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect to voice server
     info!("Connecting to voice servers...");
-    let mut client = VoiceClient::connect(&server_addr, &voice_server_addr).await?;
+    let mut client = VoiceClient::new()?;
+    client.connect(&server_addr, &voice_server_addr).await?;
     info!("Connected!");
 
     // Authenticate

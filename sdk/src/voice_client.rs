@@ -44,16 +44,23 @@ struct ClientState {
 pub struct VoiceClient {
     state: Arc<RwLock<ClientState>>,
     request_tx: Sender<Vec<u8>>,
+    request_rx: Receiver<Vec<u8>>,
+    response_tx: Sender<(PacketId, Vec<u8>)>,
     response_rx: Receiver<(PacketId, Vec<u8>)>,
+    event_tx: Sender<(PacketId, Vec<u8>)>,
     event_rx: Receiver<(PacketId, Vec<u8>)>,
     voice_input_tx: Sender<Vec<f32>>,
+    voice_input_rx: Receiver<Vec<f32>>,
     decoder: Arc<VoiceDecoder>,
     udp_send_tx: Sender<Vec<u8>>,
+    udp_send_rx: Receiver<Vec<u8>>,
+    udp_recv_tx: Sender<(PacketId, Vec<u8>)>,
     udp_recv_rx: Receiver<(PacketId, Vec<u8>)>,
 }
 
 impl VoiceClient {
-    pub async fn connect(management_server_addr: &str, voice_server_addr: &str) -> Result<Self, VoiceClientError> {
+    /// Create a new VoiceClient with all channels initialized
+    pub fn new() -> Result<Self, VoiceClientError> {
         // Create TCP channels
         let (request_tx, request_rx) = unbounded();
         let (response_tx, response_rx) = unbounded();
@@ -71,22 +78,30 @@ impl VoiceClient {
         let (udp_recv_tx, udp_recv_rx) = unbounded();
 
         // Create client with empty state
-        let client = VoiceClient {
+        Ok(VoiceClient {
             state: Arc::new(RwLock::new(ClientState {
                 user_id: None,
                 voice_token: None,
                 participants: HashMap::new(),
                 in_voice_channel: false,
             })),
-            request_tx: request_tx.clone(),
+            request_tx,
+            request_rx,
+            response_tx,
             response_rx,
+            event_tx,
             event_rx,
             voice_input_tx,
-            decoder: decoder.clone(),
-            udp_send_tx: udp_send_tx.clone(),
+            voice_input_rx,
+            decoder,
+            udp_send_tx,
+            udp_send_rx,
+            udp_recv_tx,
             udp_recv_rx,
-        };
+        })
+    }
 
+    pub async fn connect(&mut self, management_server_addr: &str, voice_server_addr: &str) -> Result<(), VoiceClientError> {
         // Connect TCP socket
         let tcp_socket = TcpStream::connect(management_server_addr)
             .await
@@ -107,12 +122,22 @@ impl VoiceClient {
         info!("[Voice] Connected to {}", voice_server_addr);
 
         // Spawn background tasks
-        client.spawn_tcp_handler(tcp_socket, request_rx, response_tx, event_tx);
-        client.spawn_udp_handler(udp_socket, udp_send_rx, udp_recv_tx, decoder.clone());
-        client.spawn_event_processor();
-        client.spawn_voice_transmitter(voice_input_rx, udp_send_tx.clone());
+        self.spawn_tcp_handler(
+            tcp_socket,
+            self.request_rx.clone(),
+            self.response_tx.clone(),
+            self.event_tx.clone(),
+        );
+        self.spawn_udp_handler(
+            udp_socket,
+            self.udp_send_rx.clone(),
+            self.udp_recv_tx.clone(),
+            self.decoder.clone(),
+        );
+        self.spawn_event_processor();
+        self.spawn_voice_transmitter(self.voice_input_rx.clone(), self.udp_send_tx.clone());
 
-        Ok(client)
+        Ok(())
     }
 
     pub async fn authenticate(&mut self, username: &str) -> Result<(), VoiceClientError> {
