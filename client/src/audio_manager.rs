@@ -1,5 +1,5 @@
 use cpal::Stream;
-use tokio::sync::mpsc;
+use async_channel::Sender;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 use std::sync::{Arc, Mutex};
@@ -10,7 +10,7 @@ use crate::output::{create_output_stream, AudioOutputHandle};
 
 /// Audio manager that handles recording and playback lifecycle
 pub struct AudioManager {
-    voice_input_tx: mpsc::UnboundedSender<Vec<f32>>,
+    voice_input_tx: Sender<Vec<f32>>,
     decoder: Arc<VoiceDecoder>,
     input_stream: Arc<Mutex<Option<Stream>>>,
     input_receiver_task: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -20,7 +20,7 @@ pub struct AudioManager {
 
 impl AudioManager {
     /// Create a new AudioManager with voice input sender and voice decoder
-    pub fn new(voice_input_tx: mpsc::UnboundedSender<Vec<f32>>, decoder: Arc<VoiceDecoder>) -> Self {
+    pub fn new(voice_input_tx: Sender<Vec<f32>>, decoder: Arc<VoiceDecoder>) -> Self {
         AudioManager {
             voice_input_tx,
             decoder,
@@ -43,7 +43,7 @@ impl AudioManager {
         let task = tokio::spawn(async move {
             let mut rx = receiver;
             while let Some(frame) = rx.recv().await {
-                if let Err(e) = voice_input_tx.send(frame) {
+                if let Err(e) = voice_input_tx.send(frame).await {
                     error!("Failed to send audio frame to SDK: {}", e);
                     break;
                 }

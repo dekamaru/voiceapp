@@ -9,3 +9,4 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 opus = "0.3"
 neteq = "0.7.1"
+async-channel = "2.5.0"

@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::{mpsc, broadcast, RwLock};
+use tokio::sync::RwLock;
+use async_channel::{Sender, Receiver, unbounded};
 use tracing::{debug, error, info};
 
 use voiceapp_protocol::{PacketId, ParticipantInfo};
@@ -42,23 +43,22 @@ struct ClientState {
 /// The VoiceClient for managing voice connections
 pub struct VoiceClient {
     state: Arc<RwLock<ClientState>>,
-    request_tx: mpsc::UnboundedSender<Vec<u8>>,
-    response_rx: mpsc::UnboundedReceiver<(PacketId, Vec<u8>)>,
-    event_rx: broadcast::Receiver<(PacketId, Vec<u8>)>,
-    voice_input_tx: mpsc::UnboundedSender<Vec<f32>>,
+    request_tx: Sender<Vec<u8>>,
+    response_rx: Receiver<(PacketId, Vec<u8>)>,
+    event_rx: Receiver<(PacketId, Vec<u8>)>,
+    voice_input_tx: Sender<Vec<f32>>,
     decoder: Arc<VoiceDecoder>,
-    udp_send_tx: mpsc::UnboundedSender<Vec<u8>>,
-    udp_recv_rx: mpsc::UnboundedReceiver<(PacketId, Vec<u8>)>,
+    udp_send_tx: Sender<Vec<u8>>,
+    udp_recv_rx: Receiver<(PacketId, Vec<u8>)>,
 }
 
 impl VoiceClient {
     pub async fn connect(management_server_addr: &str, voice_server_addr: &str) -> Result<Self, VoiceClientError> {
         // Create TCP channels
-        let (request_tx, request_rx) = mpsc::unbounded_channel();
-        let (response_tx, response_rx) = mpsc::unbounded_channel();
-        let (event_tx, _) = broadcast::channel(100);
-        let event_rx = event_tx.subscribe();
-        let (voice_input_tx, voice_input_rx) = mpsc::unbounded_channel();
+        let (request_tx, request_rx) = unbounded();
+        let (response_tx, response_rx) = unbounded();
+        let (event_tx, event_rx) = unbounded();
+        let (voice_input_tx, voice_input_rx) = unbounded();
 
         // Create decoder
         let decoder = Arc::new(
@@ -67,8 +67,8 @@ impl VoiceClient {
         );
 
         // Create UDP channels
-        let (udp_send_tx, udp_send_rx) = mpsc::unbounded_channel();
-        let (udp_recv_tx, udp_recv_rx) = mpsc::unbounded_channel();
+        let (udp_send_tx, udp_send_rx) = unbounded();
+        let (udp_recv_tx, udp_recv_rx) = unbounded();
 
         // Create client with empty state
         let client = VoiceClient {
@@ -119,7 +119,7 @@ impl VoiceClient {
         debug!("Authenticating as '{}'", username);
 
         // TCP authentication
-        self.request_tx.send(voiceapp_protocol::encode_login_request(username)).map_err(|_| VoiceClientError::Disconnected)?;
+        self.request_tx.send(voiceapp_protocol::encode_login_request(username)).await.map_err(|_| VoiceClientError::Disconnected)?;
         let response = self.wait_for_response_with(PacketId::LoginResponse, 5, voiceapp_protocol::decode_login_response).await?;
 
         // Update client state with user_id and voice_token
@@ -143,7 +143,7 @@ impl VoiceClient {
 
             // Send VoiceAuthRequest
             let auth_request = voiceapp_protocol::encode_voice_auth_request(voice_token);
-            self.udp_send_tx.send(auth_request).map_err(|_| VoiceClientError::Disconnected)?;
+            self.udp_send_tx.send(auth_request).await.map_err(|_| VoiceClientError::Disconnected)?;
 
             // Wait for VoiceAuthResponse with 5s timeout
             let timeout_result = tokio::time::timeout(
@@ -151,7 +151,7 @@ impl VoiceClient {
                 async {
                     loop {
                         match self.udp_recv_rx.recv().await {
-                            Some((packet_id, payload)) => {
+                            Ok((packet_id, payload)) => {
                                 if packet_id == PacketId::VoiceAuthResponse {
                                     return match voiceapp_protocol::decode_voice_auth_response(&payload) {
                                         Ok(true) => Ok(()),
@@ -161,7 +161,7 @@ impl VoiceClient {
                                 }
                                 // Ignore other packets, keep waiting for auth response
                             }
-                            None => return Err(VoiceClientError::Disconnected),
+                            Err(_) => return Err(VoiceClientError::Disconnected),
                         }
                     }
                 }
@@ -193,6 +193,7 @@ impl VoiceClient {
 
         self.request_tx
             .send(payload)
+            .await
             .map_err(|_| VoiceClientError::Disconnected)?;
 
         // Wait for response
@@ -220,6 +221,7 @@ impl VoiceClient {
 
         self.request_tx
             .send(payload)
+            .await
             .map_err(|_| VoiceClientError::Disconnected)?;
 
         // Wait for response
@@ -246,7 +248,7 @@ impl VoiceClient {
 
     /// Get a sender for raw voice samples (Vec<f32>)
     /// Returns a cloneable sender that can be moved into async tasks
-    pub fn voice_input_sender(&self) -> mpsc::UnboundedSender<Vec<f32>> {
+    pub fn voice_input_sender(&self) -> Sender<Vec<f32>> {
         self.voice_input_tx.clone()
     }
 
@@ -259,7 +261,7 @@ impl VoiceClient {
     /// Spawn event processor task (called internally from connect)
     fn spawn_event_processor(&self) {
         let state = Arc::clone(&self.state);
-        let mut event_rx = self.event_rx.resubscribe();
+        let event_rx = self.event_rx.clone();
 
         tokio::spawn(async move {
             loop {
@@ -270,12 +272,9 @@ impl VoiceClient {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Closed) => {
+                    Err(_) => {
                         debug!("Event stream closed");
                         break;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        debug!("Event stream lagged");
                     }
                 }
             }
@@ -283,9 +282,8 @@ impl VoiceClient {
     }
 
     /// Spawn voice transmitter task that encodes audio frames and sends them over UDP
-    fn spawn_voice_transmitter(&self, voice_input_rx: mpsc::UnboundedReceiver<Vec<f32>>, udp_send_tx: mpsc::UnboundedSender<Vec<u8>>) {
+    fn spawn_voice_transmitter(&self, voice_input_rx: Receiver<Vec<f32>>, udp_send_tx: Sender<Vec<u8>>) {
         tokio::spawn(async move {
-            let mut rx = voice_input_rx;
             let mut codec = match VoiceEncoder::new() {
                 Ok(c) => c,
                 Err(e) => {
@@ -297,49 +295,56 @@ impl VoiceClient {
             // Buffer to accumulate samples until we have OPUS_FRAME_SAMPLES
             let mut sample_buffer = Vec::with_capacity(OPUS_FRAME_SAMPLES * 2);
 
-            while let Some(samples) = rx.recv().await {
-                // Add received samples to buffer
-                sample_buffer.extend_from_slice(&samples);
+            loop {
+                match voice_input_rx.recv().await {
+                    Ok(samples) => {
+                        // Add received samples to buffer
+                        sample_buffer.extend_from_slice(&samples);
 
-                // Encode complete frames
-                while sample_buffer.len() >= OPUS_FRAME_SAMPLES {
-                    let frame: Vec<f32> = sample_buffer.drain(0..OPUS_FRAME_SAMPLES).collect();
+                        // Encode complete frames
+                        while sample_buffer.len() >= OPUS_FRAME_SAMPLES {
+                            let frame: Vec<f32> = sample_buffer.drain(0..OPUS_FRAME_SAMPLES).collect();
 
-                    match codec.encode(&frame) {
-                        Ok(Some(packet)) => {
-                            let encoded = voiceapp_protocol::encode_voice_data(&packet);
-                            if let Err(e) = udp_send_tx.send(encoded) {
-                                error!("Failed to send voice data over UDP: {}", e);
-                                return;
+                            match codec.encode(&frame) {
+                                Ok(Some(packet)) => {
+                                    let encoded = voiceapp_protocol::encode_voice_data(&packet);
+                                    match udp_send_tx.send(encoded).await {
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            error!("Failed to send voice data over UDP: {}", e);
+                                            return;
+                                        }
+                                    }
+                                }
+                                Ok(None) => {
+                                    error!("Encoder returned None for full frame");
+                                    return;
+                                }
+                                Err(e) => {
+                                    error!("Failed to encode voice frame: {}", e);
+                                    return;
+                                }
                             }
                         }
-                        Ok(None) => {
-                            error!("Encoder returned None for full frame");
-                            return;
-                        }
-                        Err(e) => {
-                            error!("Failed to encode voice frame: {}", e);
-                            return;
-                        }
                     }
-                }
-            }
-
-            // Encode and send any remaining samples
-            if !sample_buffer.is_empty() {
-                debug!("Encoding {} remaining samples", sample_buffer.len());
-                match codec.encode(&sample_buffer) {
-                    Ok(Some(packet)) => {
-                        let encoded = voiceapp_protocol::encode_voice_data(&packet);
-                        if let Err(e) = udp_send_tx.send(encoded) {
-                            error!("Failed to send final voice data over UDP: {}", e);
+                    Err(_) => {
+                        // Channel closed, encode and send any remaining samples
+                        if !sample_buffer.is_empty() {
+                            debug!("Encoding {} remaining samples", sample_buffer.len());
+                            match codec.encode(&sample_buffer) {
+                                Ok(Some(packet)) => {
+                                    let encoded = voiceapp_protocol::encode_voice_data(&packet);
+                                    let _ = udp_send_tx.send(encoded).await;
+                                }
+                                Ok(None) => {
+                                    debug!("No final frame to send");
+                                }
+                                Err(e) => {
+                                    error!("Failed to encode remaining samples: {}", e);
+                                }
+                            }
                         }
-                    }
-                    Ok(None) => {
-                        debug!("No final frame to send");
-                    }
-                    Err(e) => {
-                        error!("Failed to encode remaining samples: {}", e);
+                        break;
                     }
                 }
             }
@@ -352,9 +357,9 @@ impl VoiceClient {
     fn spawn_tcp_handler(
         &self,
         socket: TcpStream,
-        request_rx: mpsc::UnboundedReceiver<Vec<u8>>,
-        response_tx: mpsc::UnboundedSender<(PacketId, Vec<u8>)>,
-        event_tx: broadcast::Sender<(PacketId, Vec<u8>)>,
+        request_rx: Receiver<Vec<u8>>,
+        response_tx: Sender<(PacketId, Vec<u8>)>,
+        event_tx: Sender<(PacketId, Vec<u8>)>,
     ) {
         tokio::spawn(async move {
             if let Err(e) = tcp_handler(socket, request_rx, response_tx, event_tx).await {
@@ -367,8 +372,8 @@ impl VoiceClient {
     fn spawn_udp_handler(
         &self,
         socket: UdpSocket,
-        send_rx: mpsc::UnboundedReceiver<Vec<u8>>,
-        recv_tx: mpsc::UnboundedSender<(PacketId, Vec<u8>)>,
+        send_rx: Receiver<Vec<u8>>,
+        recv_tx: Sender<(PacketId, Vec<u8>)>,
         decoder: Arc<VoiceDecoder>,
     ) {
         tokio::spawn(async move {
@@ -455,12 +460,16 @@ impl VoiceClient {
         let timeout = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
             async {
-                while let Some((packet_id, payload)) = self.response_rx.recv().await {
-                    if packet_id == expected_id {
-                        return Ok(payload);
+                loop {
+                    match self.response_rx.recv().await {
+                        Ok((packet_id, payload)) => {
+                            if packet_id == expected_id {
+                                return Ok(payload);
+                            }
+                        }
+                        Err(_) => return Err(VoiceClientError::Disconnected),
                     }
                 }
-                Err(VoiceClientError::Disconnected)
             },
         );
 
@@ -479,16 +488,21 @@ impl VoiceClient {
 /// TCP handler task that multiplexes between requests and server responses
 async fn tcp_handler(
     mut socket: TcpStream,
-    mut request_rx: mpsc::UnboundedReceiver<Vec<u8>>,
-    response_tx: mpsc::UnboundedSender<(PacketId, Vec<u8>)>,
-    event_tx: broadcast::Sender<(PacketId, Vec<u8>)>,
+    request_rx: Receiver<Vec<u8>>,
+    response_tx: Sender<(PacketId, Vec<u8>)>,
+    event_tx: Sender<(PacketId, Vec<u8>)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut read_buf = [0u8; 4096];
 
     loop {
         tokio::select! {
             // Handle outgoing requests (already fully encoded)
-            Some(packet) = request_rx.recv() => { socket.write_all(&packet).await? }
+            result = request_rx.recv() => {
+                match result {
+                    Ok(packet) => { socket.write_all(&packet).await? }
+                    Err(_) => return Err("Request channel closed".into()),
+                }
+            }
 
             // Handle incoming responses/events
             n = socket.read(&mut read_buf) => {
@@ -508,14 +522,14 @@ async fn tcp_handler(
                     | PacketId::VoiceAuthResponse
                     | PacketId::JoinVoiceChannelResponse
                     | PacketId::LeaveVoiceChannelResponse => {
-                        response_tx.send((packet_id, payload.to_vec()))?;
+                        response_tx.send((packet_id, payload.to_vec())).await?;
                     }
                     // Events (0x21-0x24)
                     PacketId::UserJoinedServer
                     | PacketId::UserJoinedVoice
                     | PacketId::UserLeftVoice
                     | PacketId::UserLeftServer => {
-                        let _ = event_tx.send((packet_id, payload.to_vec()));
+                        let _ = event_tx.send((packet_id, payload.to_vec())).await;
                     }
                     // Unexpected packets
                     _ => {
@@ -530,8 +544,8 @@ async fn tcp_handler(
 /// UDP handler task for voice data and auth
 async fn udp_handler(
     socket: UdpSocket,
-    mut send_rx: mpsc::UnboundedReceiver<Vec<u8>>,
-    recv_tx: mpsc::UnboundedSender<(PacketId, Vec<u8>)>,
+    send_rx: Receiver<Vec<u8>>,
+    recv_tx: Sender<(PacketId, Vec<u8>)>,
     decoder: Arc<VoiceDecoder>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut read_buf = [0u8; 4096];
@@ -539,9 +553,14 @@ async fn udp_handler(
     loop {
         tokio::select! {
             // Handle outgoing packets
-            Some(packet) = send_rx.recv() => {
-                socket.send(&packet).await?;
-                // TODO: packet.len() for bytes sent
+            result = send_rx.recv() => {
+                match result {
+                    Ok(packet) => {
+                        socket.send(&packet).await?;
+                        // TODO: packet.len() for bytes sent
+                    }
+                    Err(_) => return Err("Send channel closed".into()),
+                }
             }
 
             // Handle incoming packets
@@ -565,7 +584,7 @@ async fn udp_handler(
                     }
                 } else {
                     // Route non-voice packets to receiver
-                    let _ = recv_tx.send((packet_id, payload.to_vec()));
+                    let _ = recv_tx.send((packet_id, payload.to_vec())).await;
                 }
             }
         }
