@@ -8,19 +8,33 @@ use iced::widget::{container, row, column, vertical_rule, rule, text, Space, but
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
 
+mod icon;
+mod colors;
+
+use icon::Icon;
+use colors::*;
+
 fn main() -> iced::Result {
-    iced::application("My App", Application::update, Application::view).theme(|_state: &Application| {
-        Theme::custom("dark".to_string(), Palette {
-            background: Color::from_rgb8(22, 23, 26),
-            ..Dark.palette()
-        })
-    }).settings(Settings {
+    let settings = Settings {
         fonts: vec![
             include_bytes!("../fonts/phosphor-fill.ttf").as_slice().into(),
             include_bytes!("../fonts/phosphor-regular.ttf").as_slice().into(),
         ],
         ..Settings::default()
-    }).run()
+    };
+
+    let theme = |_state: &Application| {
+        Theme::custom("dark".to_string(), Palette {
+            background: background_dark(),
+            text: text_primary(),
+            ..Dark.palette()
+        })
+    };
+
+    iced::application("Voiceapp", Application::update, Application::view)
+        .theme(theme)
+        .settings(settings)
+        .run()
 }
 
 #[derive(Debug, Clone)]
@@ -95,7 +109,7 @@ impl Application {
             .width(Length::Fill)
             .height(Length::Fill);
 
-        let error_area = container(text(self.login_error.clone()).color(Color::from_rgb8(228, 66, 69)))
+        let error_area = container(text(self.login_error.clone()).color(color_error()))
             .align_y(Vertical::Bottom)
             .align_x(Horizontal::Center)
             .width(Length::Fill)
@@ -113,7 +127,7 @@ impl Application {
 
         let rule_style = |_theme: &Theme| {
             rule::Style {
-                color: Color::from_rgb8(48, 48, 52),
+                color: divider_bg(),
                 width: 1,
                 radius: Radius::default(),
                 fill_mode: FillMode::Full,
@@ -140,7 +154,7 @@ impl Application {
 
         let bottom_bar = container(
             row!(
-                Self::i_cog(Color::from_rgb8(76, 76, 76), 24),
+                Icon::cog_fill(text_secondary(), 24),
                 Space::with_width(Length::Fill),
                 Self::mute_slider(false)
             )
@@ -186,16 +200,16 @@ impl Application {
     ) -> iced::widget::Container<Message> {
         let container_style = |_theme: &iced::Theme| {
             Style {
-                background: Some(Background::Color(Color::from_rgb8(38, 39, 41))),
+                background: Some(Background::Color(container_bg())),
                 border: border::rounded(24),
                 ..Style::default()
             }
         };
 
         let color = if *active {
-            Color::from_rgb8(242, 242, 242)
+            text_primary()
         } else {
-            Color::from_rgb8(76, 76, 76)
+            text_secondary()
         };
 
         let circle_style = move |_theme: &iced::Theme| {
@@ -215,13 +229,13 @@ impl Application {
                     background: Background::Color(Color::TRANSPARENT),
                     border: Border::default(),
                     icon: Color::TRANSPARENT,
-                    placeholder: Color::from_rgb8(76, 76, 76),
-                    value: Color::from_rgb8(242, 242, 242),
-                    selection: Color::from_rgba8(242, 242, 242, 0.1)
+                    placeholder: text_secondary(),
+                    value: text_primary(),
+                    selection: text_selection()
                 }
             });
 
-        let submit_button_container = container(Self::i_arrow_right(Color::BLACK, 16))
+        let submit_button_container = container(Icon::arrow_right_solid(Color::BLACK, 16))
             .width(24)
             .height(24)
             .align_x(Horizontal::Center)
@@ -247,7 +261,7 @@ impl Application {
     fn input(&self, placeholder: &str, value: &mut String, message: fn(String) -> Message, submit_message: Message) -> iced::widget::Container<Message> {
         let container_style = |_theme: &iced::Theme| {
             Style {
-                background: Some(Background::Color(Color::from_rgb8(38, 39, 41))),
+                background: Some(Background::Color(container_bg())),
                 border: border::rounded(24),
                 ..Style::default()
             }
@@ -263,9 +277,9 @@ impl Application {
                         background: Background::Color(Color::TRANSPARENT),
                         border: Border::default(),
                         icon: Color::TRANSPARENT,
-                        placeholder: Color::from_rgb8(76, 76, 76),
-                        value: Color::from_rgb8(242, 242, 242),
-                        selection: Color::from_rgba8(242, 242, 242, 0.1)
+                        placeholder: text_secondary(),
+                        value: text_primary(),
+                        selection: text_selection()
                     }
                 }),
         ).width(262).height(48).padding(Padding {top: 13.0, right: 16.0, bottom: 12.0, left: 16.0}).style(container_style)
@@ -274,9 +288,9 @@ impl Application {
     fn button<Message>(str: &str) -> iced::widget::button::Button<Message> {
         let style = |_theme: &iced::Theme, _status| {
             button::Style {
-                background: Some(Background::Color(Color::from_rgb8(38, 39, 41))),
+                background: Some(Background::Color(container_bg())),
                 border: border::rounded(24),
-                text_color: Color::from_rgb8(242, 242, 242),
+                text_color: text_primary(),
                 ..button::Style::default()
             }
         };
@@ -288,13 +302,9 @@ impl Application {
     }
 
     fn mute_slider<'a>(muted: bool) -> iced::widget::Container<'a, Message> {
-        let green_color: Color = Color::from_rgb8(52, 199, 89);
-        let red_color: Color = Color::from_rgb8(255, 56, 60);
-        let gray_color: Color = Color::from_rgb8(76, 76, 76);
-
         let inner_circle_style = |_theme: &iced::Theme| {
             Style {
-                background: Some(Background::Color(Color::from_rgb8(242, 242, 242))),
+                background: Some(Background::Color(slider_thumb())),
                 border: border::rounded(30),
                 ..Style::default()
             }
@@ -302,7 +312,7 @@ impl Application {
 
         let outer_container_style = |_theme: &iced::Theme| {
             Style {
-                background: Some(Background::Color(Color::from_rgb8(76, 76, 76))),
+                background: Some(Background::Color(slider_bg())),
                 border: border::rounded(20),
                 ..Style::default()
             }
@@ -327,78 +337,45 @@ impl Application {
             .style(outer_container_style);
 
         let icon_left_color = if muted {
-            red_color
+            color_alert()
         } else {
-            gray_color
+            text_secondary()
         };
 
         let icon_right_color = if muted {
-            gray_color
+            text_secondary()
         } else {
-            green_color
+            color_success()
         };
 
         let row = row!(
-            Self::i_microphone_slash(icon_left_color, 24),
+            Icon::microphone_slash_fill(icon_left_color, 24),
             outer_container,
-            Self::i_microphone(icon_right_color, 24),
+            Icon::microphone_fill(icon_right_color, 24),
         );
 
         container(row.spacing(8).align_y(Vertical::Center))
     }
 
     fn member(username: &str, in_voice: bool, muted: bool) -> iced::widget::Container<Message> {
-        let green_color: Color = Color::from_rgb8(52, 199, 89);
-        let red_color: Color = Color::from_rgb8(255, 56, 60);
-        let gray_color: Color = Color::from_rgb8(76, 76, 76);
-
         let icon = if in_voice {
             if muted {
-                Self::i_microphone_slash(red_color, 16)
+                Icon::microphone_slash_fill(color_alert(), 16)
             } else {
-                Self::i_microphone(green_color, 16)
+                Icon::microphone_fill(color_success(), 16)
             }
         } else {
-            Self::i_moon_stars(gray_color, 16)
+            Icon::moon_stars_fill(text_secondary(), 16)
         };
 
         container(row!(icon, text(username).size(14)).spacing(8)).padding(8).width(Length::Fill)
     }
 
-    fn i_cog<'a, Message>(color: Color, size: u16) -> iced::Element<'a, Message> {
-        Self::icon('\u{E272}', color, size)
-    }
-
-    fn i_microphone<'a, Message>(color: Color, size: u16) -> iced::Element<'a, Message> {
-        Self::icon('\u{E326}', color, size)
-    }
-
-    fn i_microphone_slash<'a, Message>(color: Color, size: u16) -> iced::Element<'a, Message> {
-        Self::icon('\u{E328}', color, size)
-    }
-
-    fn i_moon_stars<'a, Message>(color: Color, size: u16) -> iced::Element<'a, Message> {
-        Self::icon('\u{E58E}', color, size)
-    }
-
-    fn i_arrow_right<'a, Message>(color: Color, size: u16) -> iced::Element<'a, Message> {
-        Self::icon_regular('\u{E06C}', color, size)
-    }
-
-    fn icon<'a, Message>(codepoint: char, color: Color, size: u16) -> iced::Element<'a, Message> {
-        const ICON_FONT: Font = Font::with_name("Phosphor-Fill");
-        text(codepoint).font(ICON_FONT).size(size).color(color).into()
-    }
-
-    fn icon_regular<'a, Message>(codepoint: char, color: Color, size: u16) -> iced::Element<'a, Message> {
-        const ICON_FONT: Font = Font::with_name("Phosphor");
-        text(codepoint).font(ICON_FONT).size(size).color(color).into()
-    }
 
     fn debug_border(&self) -> fn(&Theme) -> Style {
         |_theme: &Theme| {
             Style {
-                border: border::width(1).color(Color::from_rgb8(255, 0, 0)),
+                border: border::width(1).color(debug_red()),
                 ..Style::default()
             }
         }
