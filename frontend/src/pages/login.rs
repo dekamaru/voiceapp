@@ -1,5 +1,6 @@
 use iced::{border, font, Background, Border, Color, Element, Font, Length, Padding, Task};
 use iced::alignment::{Horizontal, Vertical};
+use iced::font::{Family, Weight};
 use iced::widget::{button, container, row, stack, text, text_input, Space};
 use iced::widget::container::Style;
 use voiceapp_sdk::VoiceClient;
@@ -42,8 +43,9 @@ impl LoginPage {
 
     fn login_screen(&self) -> iced::widget::Stack<Message> {
         let bold = Font {
-            weight: font::Weight::ExtraBold,
-            ..Font::DEFAULT
+            family: Family::Name("Rubik SemiBold"),
+            weight: Weight::Semibold,
+            ..Default::default()
         };
 
         // FIXME: "Tab" support between inputs

@@ -1,4 +1,4 @@
-use iced::{window, Settings, Task, Theme};
+use iced::{window, Font, Settings, Task, Theme};
 use iced::application::Appearance;
 use iced::Theme::Dark;
 use iced::theme::Palette;
@@ -19,7 +19,10 @@ fn main() -> iced::Result {
         fonts: vec![
             include_bytes!("../fonts/phosphor-fill.ttf").as_slice().into(),
             include_bytes!("../fonts/phosphor-regular.ttf").as_slice().into(),
+            include_bytes!("../fonts/rubik-regular.ttf").as_slice().into(),
+            include_bytes!("../fonts/rubik-semibold.ttf").as_slice().into(),
         ],
+        default_font: Font::with_name("Rubik"),
         ..Settings::default()
     };
 
@@ -31,19 +34,9 @@ fn main() -> iced::Result {
         })
     };
 
-    let window_settings = window::Settings {
-        platform_specific: PlatformSpecific {
-            title_hidden: true,
-            titlebar_transparent: true,
-            fullsize_content_view: true
-        },
-        ..window::Settings::default()
-    };
-
     iced::application("Voiceapp", Application::update, Application::view)
         .theme(theme)
         .settings(settings)
-        .window(window_settings)
         .run_with(Application::new)
 }
 

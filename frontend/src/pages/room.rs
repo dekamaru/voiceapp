@@ -1,6 +1,7 @@
-use iced::{border, font, Background, Border, Color, Element, Font, Length, Padding, Theme};
+use iced::{border, font, Alignment, Background, Border, Color, Element, Font, Length, Padding, Theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::border::Radius;
+use iced::font::Family;
 use iced::widget::{button, container, horizontal_rule, row, rule, text, vertical_rule, Space, column};
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
@@ -32,7 +33,8 @@ impl RoomPage {
 
     fn main_screen<'a>(&self) -> iced::widget::Container<'a, Message> {
         let bold = Font {
-            weight: font::Weight::ExtraBold,
+            weight: font::Weight::Semibold,
+            family: Family::Name("Rubik SemiBold"),
             ..Font::DEFAULT
         };
 
@@ -96,7 +98,6 @@ impl RoomPage {
         );
 
         container(window_area)
-            .padding(4)
             .width(Length::Fill)
             .height(Length::Fill)
     }
@@ -190,11 +191,16 @@ impl RoomPage {
             text_primary()
         };
 
-        container(row!(icon, text(username).size(14).color(text_color)).spacing(8)).padding(8).width(Length::Fill)
+        container(
+            row!(
+                icon,
+                container(text(username).size(14).color(text_color)).padding(Padding { top: 1.2, ..Padding::default() })
+            ).spacing(8)
+        ).padding(8).width(Length::Fill)
     }
 
 
-    fn debug_border(&self) -> fn(&Theme) -> Style {
+    fn debug_border() -> fn(&Theme) -> Style {
         |_theme: &Theme| {
             Style {
                 border: border::width(1).color(debug_red()),
