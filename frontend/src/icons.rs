@@ -5,7 +5,7 @@ use iced::widget::text;
 pub struct Icons;
 
 impl Icons {
-    pub fn cog_fill<'a, Message>(color: Color, size: u16) -> Element<'a, Message> {
+    pub fn gear_six_fill<'a, Message>(color: Color, size: u16) -> Element<'a, Message> {
         Self::icon_fill('\u{E272}', color, size)
     }
 
@@ -17,8 +17,8 @@ impl Icons {
         Self::icon_fill('\u{E328}', color, size)
     }
 
-    pub fn moon_stars_fill<'a, Message>(color: Color, size: u16) -> Element<'a, Message> {
-        Self::icon_fill('\u{E58E}', color, size)
+    pub fn chat_teardrop_dots_fill<'a, Message>(color: Color, size: u16) -> Element<'a, Message> {
+        Self::icon_fill('\u{E176}', color, size)
     }
 
     pub fn arrow_right_solid<'a, Message>(color: Color, size: u16) -> Element<'a, Message> {

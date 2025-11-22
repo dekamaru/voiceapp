@@ -13,19 +13,9 @@ use colors::*;
 use pages::login::LoginPageMessage;
 use pages::login::LoginPage;
 use pages::room::RoomPageMessage;
+use crate::pages::room::RoomPage;
 
 fn main() -> iced::Result {
-    let settings = Settings {
-        fonts: vec![
-            include_bytes!("../fonts/phosphor-fill.ttf").as_slice().into(),
-            include_bytes!("../fonts/phosphor-regular.ttf").as_slice().into(),
-            include_bytes!("../fonts/rubik-regular.ttf").as_slice().into(),
-            include_bytes!("../fonts/rubik-semibold.ttf").as_slice().into(),
-        ],
-        default_font: Font::with_name("Rubik"),
-        ..Settings::default()
-    };
-
     let theme = |_state: &Application| {
         Theme::custom("dark".to_string(), Palette {
             background: background_dark(),
@@ -36,7 +26,12 @@ fn main() -> iced::Result {
 
     iced::application("Voiceapp", Application::update, Application::view)
         .theme(theme)
-        .settings(settings)
+        .font(include_bytes!("../fonts/phosphor-fill.ttf").as_slice())
+        .font(include_bytes!("../fonts/phosphor-regular.ttf").as_slice())
+        .font(include_bytes!("../fonts/rubik-regular.ttf").as_slice())
+        .font(include_bytes!("../fonts/rubik-semibold.ttf").as_slice())
+        .default_font(Font::with_name("Rubik"))
+        .antialiasing(true)
         .run_with(Application::new)
 }
 
@@ -59,7 +54,7 @@ impl Application {
     fn new() -> (Self, Task<Message>) {
         (
             Self {
-                page: Box::new(LoginPage::new()),
+                page: Box::new(RoomPage::new()),
             },
             Task::none()
         )
