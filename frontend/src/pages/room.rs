@@ -6,13 +6,17 @@ use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
 use crate::{Message, Page};
 use crate::colors::{color_alert, color_success, container_bg, debug_red, divider_bg, slider_bg, slider_thumb, text_primary, text_secondary};
-use crate::icon::Icon;
+use crate::icons::Icons;
+use crate::widgets::Widgets;
 
 #[derive(Default)]
-pub struct RoomPage {}
+pub struct RoomPage {
+    muted: bool
+}
 
 #[derive(Debug, Clone)]
 pub enum RoomPageMessage {
+    MuteToggle
 }
 
 impl Into<Message> for RoomPageMessage {
@@ -61,9 +65,9 @@ impl RoomPage {
 
         let bottom_bar = container(
             row!(
-                Icon::cog_fill(text_secondary(), 24),
+                Icons::cog_fill(text_secondary(), 24),
                 Space::with_width(Length::Fill),
-                Self::mute_slider(false)
+                Self::mute_slider(self.muted)
             )
         )
             .width(Length::Fill)
@@ -113,7 +117,7 @@ impl RoomPage {
             .style(style)
     }
 
-    fn mute_slider<'a>(muted: bool) -> iced::widget::Container<'a, Message> {
+    fn mute_slider<'a>(muted: bool) -> iced::widget::Button<'a, Message> {
         let inner_circle_style = |_theme: &iced::Theme| {
             Style {
                 background: Some(Background::Color(slider_thumb())),
@@ -161,26 +165,32 @@ impl RoomPage {
         };
 
         let row = row!(
-            Icon::microphone_slash_fill(icon_left_color, 24),
+            Icons::microphone_slash_fill(icon_left_color, 24),
             outer_container,
-            Icon::microphone_fill(icon_right_color, 24),
+            Icons::microphone_fill(icon_right_color, 24),
         );
 
-        container(row.spacing(8).align_y(Vertical::Center))
+        Widgets::container_button(container(row.spacing(8).align_y(Vertical::Center))).on_press(RoomPageMessage::MuteToggle.into())
     }
 
     fn member(username: &str, in_voice: bool, muted: bool) -> iced::widget::Container<Message> {
         let icon = if in_voice {
             if muted {
-                Icon::microphone_slash_fill(color_alert(), 16)
+                Icons::microphone_slash_fill(color_alert(), 16)
             } else {
-                Icon::microphone_fill(color_success(), 16)
+                Icons::microphone_fill(color_success(), 16)
             }
         } else {
-            Icon::moon_stars_fill(text_secondary(), 16)
+            Icons::moon_stars_fill(text_secondary(), 16)
         };
 
-        container(row!(icon, text(username).size(14)).spacing(8)).padding(8).width(Length::Fill)
+        let text_color = if !in_voice {
+            text_secondary()
+        } else {
+            text_primary()
+        };
+
+        container(row!(icon, text(username).size(14).color(text_color)).spacing(8)).padding(8).width(Length::Fill)
     }
 
 
@@ -197,7 +207,11 @@ impl RoomPage {
 impl Page for RoomPage {
     fn update(&mut self, message: Message) -> Option<Box<dyn Page>> {
         if let Message::RoomPage(msg) = message {
-            match msg {}
+            match msg {
+                RoomPageMessage::MuteToggle => {
+                    self.muted = !self.muted;
+                }
+            }
         }
 
         None

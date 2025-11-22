@@ -1,10 +1,13 @@
-use iced::{Settings, Task, Theme};
+use iced::{window, Settings, Task, Theme};
+use iced::application::Appearance;
 use iced::Theme::Dark;
 use iced::theme::Palette;
+use iced::window::settings::PlatformSpecific;
 
-mod icon;
+mod icons;
 mod colors;
 mod pages;
+mod widgets;
 
 use colors::*;
 use pages::login::LoginPageMessage;
@@ -28,9 +31,19 @@ fn main() -> iced::Result {
         })
     };
 
+    let window_settings = window::Settings {
+        platform_specific: PlatformSpecific {
+            title_hidden: true,
+            titlebar_transparent: true,
+            fullsize_content_view: true
+        },
+        ..window::Settings::default()
+    };
+
     iced::application("Voiceapp", Application::update, Application::view)
         .theme(theme)
         .settings(settings)
+        .window(window_settings)
         .run_with(Application::new)
 }
 

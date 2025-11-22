@@ -4305,6 +4305,7 @@ version = "0.1.0"
 dependencies = [
  "iced",
  "tokio",
+ "voiceapp-sdk",
 ]
 
 [[package]]

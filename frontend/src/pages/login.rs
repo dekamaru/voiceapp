@@ -1,11 +1,13 @@
-use iced::{border, font, Background, Border, Color, Element, Font, Length, Padding};
+use iced::{border, font, Background, Border, Color, Element, Font, Length, Padding, Task};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{button, container, row, stack, text, text_input, Space};
 use iced::widget::container::Style;
+use voiceapp_sdk::VoiceClient;
 use crate::{Message, Page};
 use crate::colors::{color_error, container_bg, text_primary, text_secondary, text_selection};
-use crate::icon::Icon;
+use crate::icons::Icons;
 use crate::pages::room::RoomPage;
+use crate::widgets::Widgets;
 
 #[derive(Default)]
 pub struct LoginPage {
@@ -13,6 +15,7 @@ pub struct LoginPage {
     username: String,
     form_filled: bool,
     login_error: String,
+    client: Option<VoiceClient>
 }
 
 #[derive(Debug, Clone)]
@@ -117,21 +120,14 @@ impl LoginPage {
                 }
             });
 
-        let submit_button_container = container(Icon::arrow_right_solid(Color::BLACK, 16))
+        let submit_button_container = container(Icons::arrow_right_solid(Color::BLACK, 16))
             .width(24)
             .height(24)
             .align_x(Horizontal::Center)
             .align_y(Vertical::Center)
             .style(circle_style);
 
-        let submit_button_style = |_theme: &iced::Theme, _status| {
-            button::Style {
-                background: Some(Background::Color(Color::TRANSPARENT)),
-                ..button::Style::default()
-            }
-        };
-
-        let submit_button = button(submit_button_container).padding(0).style(submit_button_style).on_press(submit_message.clone().into());
+        let submit_button = Widgets::container_button(submit_button_container).on_press(submit_message.clone().into());
 
         container(row!(input, submit_button))
             .width(262)

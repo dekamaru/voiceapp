@@ -2,9 +2,9 @@ use iced::font::Font;
 use iced::{Color, Element};
 use iced::widget::text;
 
-pub struct Icon;
+pub struct Icons;
 
-impl Icon {
+impl Icons {
     pub fn cog_fill<'a, Message>(color: Color, size: u16) -> Element<'a, Message> {
         Self::icon_fill('\u{E272}', color, size)
     }

@@ -8,5 +8,6 @@ name = "voiceapp-frontend"
 path = "src/main.rs"
 
 [dependencies]
+voiceapp-sdk = { path = "../sdk" }
 iced = { version = "0.13.1", features = ["tokio"] }
 tokio = { version = "1.48.0", features = ["full"] }
