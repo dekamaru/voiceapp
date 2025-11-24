@@ -16,9 +16,10 @@ use colors::*;
 use pages::login::LoginPageMessage;
 use pages::login::LoginPage;
 use pages::room::RoomPageMessage;
-use voiceapp_sdk::{voice_client, VoiceClient};
+use voiceapp_sdk::{VoiceClient, VoiceClientEvent};
 use crate::pages::room::RoomPage;
 use voice_messages::{VoiceCommand, VoiceCommandResult};
+use async_channel::Receiver;
 
 fn main() -> iced::Result {
     let theme = |_state: &Application| {
@@ -44,6 +45,8 @@ fn main() -> iced::Result {
 enum Message {
     LoginPage(LoginPageMessage),
     RoomPage(RoomPageMessage),
+
+    // Voice client message bus
     ExecuteVoiceCommand(VoiceCommand),
     VoiceCommandResult(VoiceCommandResult),
 }
@@ -70,11 +73,26 @@ impl Application {
         )
     }
 
+    fn view(&self) -> iced::Element<Message> {
+        self.page.view()
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::ExecuteVoiceCommand(VoiceCommand::Connect { management_addr, voice_addr, username }) => {
-                let client = self.voice_client.clone();
+            Message::ExecuteVoiceCommand(command) => self.handle_voice_command(command),
+            Message::VoiceCommandResult(VoiceCommandResult::Connect(Ok(()))) => {
+                self.page = Box::new(RoomPage::new());
+                Task::none()
+            }
+            other => self.page.update(other),
+        }
+    }
 
+    fn handle_voice_command(&mut self, command: VoiceCommand) -> Task<Message> {
+        let client = self.voice_client.clone();
+
+        match command {
+            VoiceCommand::Connect { management_addr, voice_addr, username } => {
                 Task::perform(
                     async move {
                         let mut guard = client.lock().await;
@@ -87,11 +105,6 @@ impl Application {
                     }
                 )
             }
-            other => self.page.update(other),
         }
-    }
-
-    fn view(&self) -> iced::Element<Message> {
-        self.page.view()
     }
 }

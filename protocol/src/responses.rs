@@ -16,7 +16,8 @@ pub struct LoginResponse {
 // Encode functions
 
 /// Encode login response packet
-/// Format: [packet_id: u8][payload_len: u16][id: u64 BE][voice_token: u64 BE][count: u16][user_id: u64 BE][in_voice: u8]...
+/// Format: [packet_id: u8][payload_len: u16][id: u64 BE][voice_token: u64 BE][count: u16]
+///         [user_id: u64 BE][username_len: u16 BE][username: bytes][in_voice: u8]...
 pub fn encode_login_response(id: u64, voice_token: u64, participants: &[ParticipantInfo]) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&id.to_be_bytes());
@@ -26,6 +27,11 @@ pub fn encode_login_response(id: u64, voice_token: u64, participants: &[Particip
     payload.extend_from_slice(&(participants.len() as u16).to_be_bytes());
     for participant in participants {
         payload.extend_from_slice(&participant.user_id.to_be_bytes());
+
+        let username_bytes = participant.username.as_bytes();
+        payload.extend_from_slice(&(username_bytes.len() as u16).to_be_bytes());
+        payload.extend_from_slice(username_bytes);
+
         payload.push(if participant.in_voice { 1 } else { 0 });
     }
 
@@ -56,7 +62,8 @@ pub fn encode_leave_voice_channel_response(success: bool) -> Vec<u8> {
 // Decode functions
 
 /// Decode login response payload
-/// Format: [id: u64 BE][voice_token: u64 BE][count: u16][user_id: u64 BE][in_voice: u8]...
+/// Format: [id: u64 BE][voice_token: u64 BE][count: u16]
+///         [user_id: u64 BE][username_len: u16 BE][username: bytes][in_voice: u8]...
 pub fn decode_login_response(data: &[u8]) -> io::Result<LoginResponse> {
     if data.len() < 18 {
         // 8 bytes (id) + 8 bytes (voice_token) + 2 bytes (count)
@@ -75,7 +82,8 @@ pub fn decode_login_response(data: &[u8]) -> io::Result<LoginResponse> {
     let mut pos = 18;
 
     for _ in 0..count {
-        if pos + 9 > data.len() {
+        if pos + 10 > data.len() {
+            // minimum: 8 bytes (user_id) + 2 bytes (username_len) + 0 bytes (username) + 1 byte (in_voice)
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "incomplete participant entry in login response",
@@ -85,10 +93,24 @@ pub fn decode_login_response(data: &[u8]) -> io::Result<LoginResponse> {
         let user_id = u64::from_be_bytes(data[pos..pos + 8].try_into().unwrap());
         pos += 8;
 
+        let username_len = u16::from_be_bytes(data[pos..pos + 2].try_into().unwrap()) as usize;
+        pos += 2;
+
+        if pos + username_len + 1 > data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "incomplete username in participant entry",
+            ));
+        }
+
+        let username = String::from_utf8(data[pos..pos + username_len].to_vec())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid UTF-8 in username"))?;
+        pos += username_len;
+
         let in_voice = data[pos] != 0;
         pos += 1;
 
-        participants.push(ParticipantInfo { user_id, in_voice });
+        participants.push(ParticipantInfo { user_id, username, in_voice });
     }
 
     Ok(LoginResponse { id, voice_token, participants })

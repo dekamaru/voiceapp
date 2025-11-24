@@ -32,6 +32,21 @@ impl std::fmt::Display for VoiceClientError {
 
 impl std::error::Error for VoiceClientError {}
 
+/// Events emitted by VoiceClient when state changes occur
+#[derive(Debug, Clone)]
+pub enum VoiceClientEvent {
+    /// Initial participant list sent after successful connection
+    ParticipantsList(Vec<ParticipantInfo>),
+    /// A user joined the server
+    UserJoinedServer { user_id: u64, username: String },
+    /// A user joined a voice channel
+    UserJoinedVoice { user_id: u64 },
+    /// A user left a voice channel
+    UserLeftVoice { user_id: u64 },
+    /// A user left the server
+    UserLeftServer { user_id: u64 },
+}
+
 /// Client-side state for voice connection
 struct ClientState {
     user_id: Option<u64>,
@@ -56,6 +71,8 @@ pub struct VoiceClient {
     udp_send_rx: Receiver<Vec<u8>>,
     udp_recv_tx: Sender<(PacketId, Vec<u8>)>,
     udp_recv_rx: Receiver<(PacketId, Vec<u8>)>,
+    client_events_tx: Sender<VoiceClientEvent>,
+    client_events_rx: Receiver<VoiceClientEvent>,
 }
 
 impl VoiceClient {
@@ -76,6 +93,9 @@ impl VoiceClient {
         // Create UDP channels
         let (udp_send_tx, udp_send_rx) = unbounded();
         let (udp_recv_tx, udp_recv_rx) = unbounded();
+
+        // Create client event channels
+        let (client_events_tx, client_events_rx) = unbounded();
 
         // Create client with empty state
         Ok(VoiceClient {
@@ -98,7 +118,15 @@ impl VoiceClient {
             udp_send_rx,
             udp_recv_tx,
             udp_recv_rx,
+            client_events_tx,
+            client_events_rx,
         })
+    }
+
+    /// Subscribe to the event stream from VoiceClient
+    /// Returns a cloneable receiver that will receive all events from this point forward
+    pub fn event_stream(&self) -> Receiver<VoiceClientEvent> {
+        self.client_events_rx.clone()
     }
 
     pub async fn connect(&mut self, management_server_addr: &str, voice_server_addr: &str, username: &str) -> Result<(), VoiceClientError> {
@@ -150,11 +178,15 @@ impl VoiceClient {
         state.voice_token = Some(response.voice_token);
         state.participants = response
             .participants
-            .into_iter()
-            .map(|p| (p.user_id, p))
+            .iter()
+            .map(|p| (p.user_id, p.clone()))
             .collect();
         let voice_token = response.voice_token;
+        let participants_list = response.participants.clone();
         drop(state); // Release lock
+
+        // Send initial participants list event
+        let _ = self.client_events_tx.send(VoiceClientEvent::ParticipantsList(participants_list)).await;
 
         info!("[Management] Authenticated, user_id={}", response.id);
 
@@ -279,12 +311,13 @@ impl VoiceClient {
     fn spawn_event_processor(&self) {
         let state = Arc::clone(&self.state);
         let event_rx = self.event_rx.clone();
+        let client_events_tx = self.client_events_tx.clone();
 
         tokio::spawn(async move {
             loop {
                 match event_rx.recv().await {
                     Ok((packet_id, payload)) => {
-                        if let Err(e) = Self::handle_event(&state, packet_id, payload).await {
+                        if let Err(e) = Self::handle_event(&state, packet_id, payload, &client_events_tx).await {
                             error!("Event handling error: {}", e);
                             break;
                         }
@@ -405,6 +438,7 @@ impl VoiceClient {
         state: &Arc<RwLock<ClientState>>,
         packet_id: PacketId,
         payload: Vec<u8>,
+        client_events_tx: &Sender<VoiceClientEvent>,
     ) -> Result<(), VoiceClientError> {
         match packet_id {
             PacketId::UserJoinedServer => {
@@ -416,11 +450,18 @@ impl VoiceClient {
                     user_id,
                     ParticipantInfo {
                         user_id,
+                        username: username.clone(),
                         in_voice: false,
                     },
                 );
+                drop(s); // Release lock before sending event
 
-                debug!("User joined server: id={}, username={}", user_id, username);
+                let _ = client_events_tx.send(VoiceClientEvent::UserJoinedServer {
+                    user_id,
+                    username,
+                }).await;
+
+                debug!("User joined server: id={}", user_id);
                 Ok(())
             }
             PacketId::UserLeftServer => {
@@ -429,6 +470,9 @@ impl VoiceClient {
 
                 let mut s = state.write().await;
                 s.participants.remove(&user_id);
+                drop(s); // Release lock before sending event
+
+                let _ = client_events_tx.send(VoiceClientEvent::UserLeftServer { user_id }).await;
 
                 debug!("User left server: id={}", user_id);
                 Ok(())
@@ -441,6 +485,9 @@ impl VoiceClient {
                 if let Some(participant) = s.participants.get_mut(&user_id) {
                     participant.in_voice = true;
                 }
+                drop(s); // Release lock before sending event
+
+                let _ = client_events_tx.send(VoiceClientEvent::UserJoinedVoice { user_id }).await;
 
                 debug!("User joined voice: id={}", user_id);
                 Ok(())
@@ -453,6 +500,9 @@ impl VoiceClient {
                 if let Some(participant) = s.participants.get_mut(&user_id) {
                     participant.in_voice = false;
                 }
+                drop(s); // Release lock before sending event
+
+                let _ = client_events_tx.send(VoiceClientEvent::UserLeftVoice { user_id }).await;
 
                 debug!("User left voice: id={}", user_id);
                 Ok(())

@@ -8,6 +8,7 @@ use crate::packet_id::{serialize_packet, PacketId};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParticipantInfo {
     pub user_id: u64,
+    pub username: String,
     pub in_voice: bool,
 }
 

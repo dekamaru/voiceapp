@@ -1,15 +1,11 @@
-use std::time::Duration;
-use std::sync::Arc;
-use iced::{border, font, Background, Border, Color, Element, Font, Length, Padding, Task};
+use iced::{border, Background, Border, Color, Element, Font, Length, Padding, Task};
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Family, Weight};
 use iced::widget::{button, container, row, stack, text, text_input, Space};
 use iced::widget::container::Style;
-use voiceapp_sdk::VoiceClient;
 use crate::{Message, Page};
 use crate::colors::{color_error, container_bg, text_primary, text_secondary, text_selection};
 use crate::icons::Icons;
-use crate::pages::room::RoomPage;
 use crate::widgets::Widgets;
 use crate::voice_messages::{VoiceCommand, VoiceCommandResult};
 
@@ -194,8 +190,8 @@ impl Page for LoginPage {
                             // TODO: inputs should be blocked (buttons as well)
                             // TODO: right now protocol defines participant info reused by management server + protocol + client.
                             //  It should not be the case. Protocol should include usernames in login response.
-                            // TODO: connect() from voice client should return initial server state (participants)
-                            // TODO: subscription to events_rx from voice client, to update client state (concurrency might be an issue for initial state)
+                            // TODO: connect() from voice client should make broadcast to event tx
+                            // TODO: Client listens only to event tx!
                             return Task::done(
                                 Message::ExecuteVoiceCommand(VoiceCommand::Connect {
                                     management_addr: format!("{}:9001", self.voice_url),
@@ -209,15 +205,15 @@ impl Page for LoginPage {
             }
             Message::VoiceCommandResult(VoiceCommandResult::Connect(result)) => {
                 match result {
-                    Ok(()) => {
-                        println!("Connected to voice server!");
-                    }
                     Err(err) => {
                         self.login_error = err;
                     }
+                    _ => {}
                 }
             }
-            _ => {}
+            _ => {
+                println!("Ignored message in login page: {:?}", message);
+            }
         }
         Task::none()
     }

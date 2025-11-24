@@ -256,6 +256,7 @@ impl ManagementServer {
                 .values()
                 .map(|u| ParticipantInfo {
                     user_id: u.id,
+                    username: u.username.clone(),
                     in_voice: u.in_voice,
                 })
                 .collect::<Vec<_>>()

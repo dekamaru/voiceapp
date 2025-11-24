@@ -1,4 +1,4 @@
-use iced::{border, font, Alignment, Background, Border, Color, Element, Font, Length, Padding, Task, Theme};
+use iced::{border, font, Alignment, Background, Color, Element, Font, Length, Padding, Task, Theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::border::Radius;
 use iced::font::Family;
@@ -6,7 +6,6 @@ use iced::widget::{button, container, horizontal_rule, row, rule, text, vertical
 use iced::widget::button::Status;
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
-use iced::widget::text_input::cursor::State;
 use crate::{Message, Page};
 use crate::colors::{color_alert, color_success, container_bg, debug_red, divider_bg, slider_bg, slider_thumb, text_primary, text_secondary};
 use crate::icons::Icons;

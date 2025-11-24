@@ -4304,6 +4304,7 @@ dependencies = [
 name = "voiceapp-frontend"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "iced",
  "tokio",
  "voiceapp-sdk",
