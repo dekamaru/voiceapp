@@ -144,6 +144,7 @@ impl ManagementServer {
                             error!("[{}] Broadcast channel lagged, skipping messages", peer_addr);
                         }
                         Err(broadcast::error::RecvError::Closed) => {
+                            error!("[{}] Broadcast channel closed, skipping messages", peer_addr);
                             return Ok(());
                         }
                     }

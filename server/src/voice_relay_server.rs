@@ -111,6 +111,11 @@ impl VoiceRelayServer {
                 // Replace SSRC with user_id to prevent spoofing
                 voice_data.ssrc = sender_user_id;
 
+                if !self.management.is_user_in_voice(sender_user_id).await {
+                    error!("Received voice packet from user which is not in voice!, sender_id={}", sender_user_id);
+                    return
+                }
+
                 // Get list of destination addresses
                 let authenticated_addrs = self.authenticated_addrs.read().await;
                 let mut dest_addrs = Vec::new();

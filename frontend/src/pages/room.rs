@@ -7,17 +7,18 @@ use iced::widget::{button, container, horizontal_rule, row, rule, text, vertical
 use iced::widget::button::Status;
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
-use voiceapp_sdk::VoiceClientEvent;
+use voiceapp_sdk::{VoiceClientEvent, ParticipantInfo};
 use crate::{Message, Page};
 use crate::colors::{color_alert, color_success, container_bg, debug_red, divider_bg, slider_bg, slider_thumb, text_primary, text_secondary};
 use crate::icons::Icons;
+use crate::voice_messages::{VoiceCommand, VoiceCommandResult};
 use crate::widgets::Widgets;
 
 #[derive(Default)]
 pub struct RoomPage {
     muted: bool,
     in_voice: bool,
-    participants: HashMap<u64, voiceapp_sdk::ParticipantInfo>
+    participants: HashMap<u64, ParticipantInfo>
 }
 
 #[derive(Debug, Clone)]
@@ -53,54 +54,48 @@ impl RoomPage {
             }
         };
 
+        let participants_in_voice: Vec<_> = self.participants.values().filter(|i| i.in_voice).collect();
+        let participants_in_chat: Vec<_> = self.participants.values().filter(|i| !i.in_voice).collect();
+
+        let mut sidebar_elements = Vec::new();
+        sidebar_elements.extend(Self::render_members_section("IN VOICE", participants_in_voice));
+        sidebar_elements.extend(Self::render_members_section("IN CHAT", participants_in_chat));
+
+        let mut sidebar_column = iced::widget::Column::new();
+        for element in sidebar_elements {
+            sidebar_column = sidebar_column.push(element);
+        }
+
+        let disconnect_button = container(
+            Widgets::container_button(
+                container(text(if self.in_voice { "Disconnect" } else { "Join" }).size(14))
+                .padding(Padding {top: 16.0, right: 24.0, bottom: 16.0, left: 24.0})
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .width(Length::Fill).height(48)
+            ).on_press(RoomPageMessage::JoinLeaveToggle.into()).style(|theme, status| {
+                if status == Status::Hovered || status == Status::Pressed {
+                    button::Style {
+                        background: Some(Background::Color(text_primary())),
+                        text_color: Color::from_rgb8(40, 40, 40),
+                        border: border::rounded(24),
+                        ..button::Style::default()
+                    }
+                } else {
+                    button::Style {
+                        background: Some(Background::Color(container_bg())),
+                        text_color: text_primary(),
+                        border: border::rounded(24),
+                        ..button::Style::default()
+                    }
+                }
+            }),
+        ).padding(16).align_x(Alignment::Center).width(Length::Fill);
+
         let left_sidebar = container(
-            iced::widget::column!(
-                container(
-                    text("IN VOICE").size(12).color(text_secondary())
-                ).padding(Padding {top: 16.0, right: 16.0, bottom: 4.0, left: 16.0}).width(Length::Fill),
-                container(
-                    column!(
-                        Self::member("penetrator666", true, false),
-                        Self::member("venom1njector", true, false),
-                        Self::member("boneperrrforator", true, true),
-                    )
-                ).padding(4).width(Length::Fill),
-                container(
-                    text("IN CHAT").size(12).color(text_secondary())
-                ).padding(Padding {top: 16.0, right: 16.0, bottom: 4.0, left: 16.0}).width(Length::Fill),
-                container(
-                    column!(
-                        Self::member("RageInvader9000", false, false),
-                        Self::member("BackdoorBarbarian", false, false),
-                    )
-                ).padding(4).width(Length::Fill),
-                Space::with_height(Length::Fill),
-                    container(
-                    Widgets::container_button(
-                        container(text(if self.in_voice { "Disconnect" } else { "Join" }).size(14))
-                        .padding(Padding {top: 16.0, right: 24.0, bottom: 16.0, left: 24.0})
-                        .align_x(Alignment::Center)
-                        .align_y(Alignment::Center)
-                    .width(Length::Fill).height(48)
-                    ).on_press(RoomPageMessage::JoinLeaveToggle.into()).style(|theme, status| {
-                        if status == Status::Hovered || status == Status::Pressed {
-                            button::Style {
-                                background: Some(Background::Color(text_primary())),
-                                text_color: Color::from_rgb8(40, 40, 40),
-                                border: border::rounded(24),
-                                ..button::Style::default()
-                            }
-                        } else {
-                            button::Style {
-                                background: Some(Background::Color(container_bg())),
-                                text_color: text_primary(),
-                                border: border::rounded(24),
-                                ..button::Style::default()
-                            }
-                        }
-                    }),
-                ).padding(16).align_x(Alignment::Center).width(Length::Fill)
-            )
+            sidebar_column
+                .push(Space::with_height(Length::Fill))
+                .push(disconnect_button)
         )
             .width(214) // TODO: adaptive or not?
             .height(Length::Fill);
@@ -212,6 +207,34 @@ impl RoomPage {
         ).padding(Padding { top: 8.0, right: 12.0, bottom: 8.0, left: 12.0 }).width(Length::Fill)
     }
 
+    fn render_members_section(title: &str, participants: Vec<&ParticipantInfo>) -> Vec<Element<'static, Message>> {
+        if participants.is_empty() {
+            return Vec::new();
+        }
+
+        let mut elements: Vec<Element<'static, Message>> = Vec::new();
+
+        // Add title
+        let title_owned = title.to_string();
+        elements.push(
+            container(
+                text(title_owned).size(12).color(text_secondary())
+            ).padding(Padding {top: 16.0, right: 16.0, bottom: 4.0, left: 16.0}).width(Length::Fill)
+            .into()
+        );
+
+        // Add members
+        let mut members_column = iced::widget::Column::new();
+        for participant in participants {
+            members_column = members_column.push(Self::member(&participant.username, participant.in_voice, false));
+        }
+
+        elements.push(
+            container(members_column).padding(4).width(Length::Fill).into()
+        );
+
+        elements
+    }
 
     fn debug_border() -> fn(&Theme) -> Style {
         |_theme: &Theme| {
@@ -232,10 +255,33 @@ impl Page for RoomPage {
                         self.muted = !self.muted;
                     }
                     RoomPageMessage::JoinLeaveToggle => {
-                        self.in_voice = !self.in_voice;
+                        if self.in_voice {
+                            return Task::done(Message::ExecuteVoiceCommand(VoiceCommand::LeaveVoiceChannel))
+                        }
+
+                        return Task::done(Message::ExecuteVoiceCommand(VoiceCommand::JoinVoiceChannel));
                     }
                 }
             },
+            Message::VoiceCommandResult(result) => {
+                match result {
+                    VoiceCommandResult::JoinVoiceChannel(status) => {
+                        if status.is_ok() {
+                            self.in_voice = true;
+                        } else {
+                            println!("FAILED TO JOIN VOICE: {}", status.err().unwrap());
+                        }
+                    }
+                    VoiceCommandResult::LeaveVoiceChannel(status) => {
+                        if status.is_ok() {
+                            self.in_voice = false;
+                        } else {
+                            println!("FAILED TO LEAVE VOICE: {}", status.err().unwrap());
+                        }
+                    }
+                    _ => { println!("ignoring voice command result in room page: {:?}", result); }
+                }
+            }
             Message::ServerEventReceived(event) => {
                 match event {
                     VoiceClientEvent::ParticipantsList(list) => {
@@ -244,6 +290,7 @@ impl Page for RoomPage {
                             .collect();
                     }
                     VoiceClientEvent::UserJoinedServer { user_id, username } => {
+                        println!("User {} joined server.", username);
                         self.participants.insert(user_id, voiceapp_sdk::ParticipantInfo {
                             user_id,
                             username,
@@ -251,16 +298,19 @@ impl Page for RoomPage {
                         });
                     }
                     VoiceClientEvent::UserJoinedVoice { user_id } => {
+                        println!("User {} joined voice.", user_id);
                         if let Some(user) = self.participants.get_mut(&user_id) {
                             user.in_voice = true;
                         }
                     }
                     VoiceClientEvent::UserLeftVoice { user_id } => {
+                        println!("User {} left voice.", user_id);
                         if let Some(user) = self.participants.get_mut(&user_id) {
                             user.in_voice = false;
                         }
                     }
                     VoiceClientEvent::UserLeftServer { user_id } => {
+                        println!("User {} left server.", user_id);
                         self.participants.remove(&user_id);
                     }
                 }

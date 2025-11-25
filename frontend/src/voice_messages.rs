@@ -5,9 +5,13 @@ pub enum VoiceCommand {
         voice_addr: String,
         username: String,
     },
+    JoinVoiceChannel,
+    LeaveVoiceChannel,
 }
 
 #[derive(Debug, Clone)]
 pub enum VoiceCommandResult {
     Connect(Result<(), String>),
+    JoinVoiceChannel(Result<(), String>),
+    LeaveVoiceChannel(Result<(), String>),
 }

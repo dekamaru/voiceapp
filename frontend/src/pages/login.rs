@@ -32,7 +32,13 @@ impl Into<Message> for LoginPageMessage {
 
 impl LoginPage {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            // TODO: remove debug!
+            voice_url: "127.0.0.1".to_string(),
+            username: "test_user".to_string(),
+            form_filled: true,
+            ..Self::default()
+        }
     }
 
     fn is_form_filled(&self) -> bool {

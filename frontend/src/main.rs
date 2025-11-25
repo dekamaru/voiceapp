@@ -110,6 +110,32 @@ impl Application {
                     }
                 )
             }
+            VoiceCommand::JoinVoiceChannel => {
+                Task::perform(
+                    async move {
+                        let mut guard = client.lock().await;
+                        guard.join_channel().await
+                    },
+                    move |result| {
+                        Message::VoiceCommandResult(VoiceCommandResult::JoinVoiceChannel(
+                            result.map_err(|e| e.to_string())
+                        ))
+                    }
+                )
+            }
+            VoiceCommand::LeaveVoiceChannel => {
+                Task::perform(
+                    async move {
+                        let mut guard = client.lock().await;
+                        guard.leave_channel().await
+                    },
+                    move |result| {
+                        Message::VoiceCommandResult(VoiceCommandResult::LeaveVoiceChannel(
+                            result.map_err(|e| e.to_string())
+                        ))
+                    }
+                )
+            }
         }
     }
 }
