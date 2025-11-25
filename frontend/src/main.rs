@@ -1,4 +1,4 @@
-use iced::{window, Font, Settings, Task, Theme};
+use iced::{stream, window, Font, Settings, Subscription, Task, Theme};
 use iced::application::Appearance;
 use iced::Theme::Dark;
 use iced::theme::Palette;
@@ -49,6 +49,7 @@ enum Message {
     // Voice client message bus
     ExecuteVoiceCommand(VoiceCommand),
     VoiceCommandResult(VoiceCommandResult),
+    ServerEventReceived(VoiceClientEvent)
 }
 
 trait Page {
@@ -59,15 +60,19 @@ trait Page {
 struct Application {
     page: Box<dyn Page>,
     voice_client: Arc<Mutex<VoiceClient>>,
+    events_rx: Receiver<VoiceClientEvent>,
 }
 
 impl Application {
     fn new() -> (Self, Task<Message>) {
         let voice_client = VoiceClient::new().expect("failed to init voice client");
+        let events_rx = voice_client.event_stream();
+
         (
             Self {
                 page: Box::new(LoginPage::new()),
                 voice_client: Arc::new(Mutex::new(voice_client)),
+                events_rx
             },
             Task::none()
         )
@@ -82,7 +87,7 @@ impl Application {
             Message::ExecuteVoiceCommand(command) => self.handle_voice_command(command),
             Message::VoiceCommandResult(VoiceCommandResult::Connect(Ok(()))) => {
                 self.page = Box::new(RoomPage::new());
-                Task::none()
+                Task::run(self.events_rx.clone(), |e| { Message::ServerEventReceived(e) })
             }
             other => self.page.update(other),
         }

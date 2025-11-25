@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use iced::{border, font, Alignment, Background, Color, Element, Font, Length, Padding, Task, Theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::border::Radius;
@@ -6,6 +7,7 @@ use iced::widget::{button, container, horizontal_rule, row, rule, text, vertical
 use iced::widget::button::Status;
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
+use voiceapp_sdk::VoiceClientEvent;
 use crate::{Message, Page};
 use crate::colors::{color_alert, color_success, container_bg, debug_red, divider_bg, slider_bg, slider_thumb, text_primary, text_secondary};
 use crate::icons::Icons;
@@ -14,7 +16,8 @@ use crate::widgets::Widgets;
 #[derive(Default)]
 pub struct RoomPage {
     muted: bool,
-    in_voice: bool
+    in_voice: bool,
+    participants: HashMap<u64, voiceapp_sdk::ParticipantInfo>
 }
 
 #[derive(Debug, Clone)]
@@ -34,7 +37,7 @@ impl RoomPage {
         Self::default()
     }
 
-    fn main_screen<'a>(&self) -> iced::widget::Container<'a, Message> {
+    fn main_screen(&self) -> iced::widget::Container<'static, Message> {
         let bold = Font {
             weight: font::Weight::Semibold,
             family: Family::Name("Rubik SemiBold"),
@@ -96,7 +99,7 @@ impl RoomPage {
                             }
                         }
                     }),
-                ).padding(16).align_x(Alignment::Center).width(Length::Fill),
+                ).padding(16).align_x(Alignment::Center).width(Length::Fill)
             )
         )
             .width(214) // TODO: adaptive or not?
@@ -193,21 +196,18 @@ impl RoomPage {
         Widgets::container_button(container(row.spacing(8).align_y(Vertical::Center))).on_press(RoomPageMessage::MuteToggle.into())
     }
 
-    fn member(username: &str, in_voice: bool, muted: bool) -> iced::widget::Container<Message> {
+    fn member(username: &str, in_voice: bool, _muted: bool) -> iced::widget::Container<'static, Message> {
         let icon = if in_voice {
-            if muted {
-                Icons::microphone_slash_fill(color_alert(), 16)
-            } else {
-                Icons::microphone_fill(color_success(), 16)
-            }
+            Icons::microphone_fill(color_success(), 16)
         } else {
             Icons::chat_teardrop_dots_fill(text_secondary(), 16)
         };
 
+        let username_owned = username.to_string();
         container(
             row!(
                 icon,
-                container(text(username).size(14).color(text_primary())).padding(Padding { top: 1.2, ..Padding::default() })
+                container(text(username_owned).size(14).color(text_primary())).padding(Padding { top: 1.2, ..Padding::default() })
             ).spacing(8)
         ).padding(Padding { top: 8.0, right: 12.0, bottom: 8.0, left: 12.0 }).width(Length::Fill)
     }
@@ -225,15 +225,47 @@ impl RoomPage {
 
 impl Page for RoomPage {
     fn update(&mut self, message: Message) -> Task<Message> {
-        if let Message::RoomPage(msg) = message {
-            match msg {
-                RoomPageMessage::MuteToggle => {
-                    self.muted = !self.muted;
+        match message {
+            Message::RoomPage(room_message) => {
+                match room_message {
+                    RoomPageMessage::MuteToggle => {
+                        self.muted = !self.muted;
+                    }
+                    RoomPageMessage::JoinLeaveToggle => {
+                        self.in_voice = !self.in_voice;
+                    }
                 }
-                RoomPageMessage::JoinLeaveToggle => {
-                    self.in_voice = !self.in_voice;
+            },
+            Message::ServerEventReceived(event) => {
+                match event {
+                    VoiceClientEvent::ParticipantsList(list) => {
+                        self.participants = list.into_iter()
+                            .map(|info| (info.user_id, info))
+                            .collect();
+                    }
+                    VoiceClientEvent::UserJoinedServer { user_id, username } => {
+                        self.participants.insert(user_id, voiceapp_sdk::ParticipantInfo {
+                            user_id,
+                            username,
+                            in_voice: false,
+                        });
+                    }
+                    VoiceClientEvent::UserJoinedVoice { user_id } => {
+                        if let Some(user) = self.participants.get_mut(&user_id) {
+                            user.in_voice = true;
+                        }
+                    }
+                    VoiceClientEvent::UserLeftVoice { user_id } => {
+                        if let Some(user) = self.participants.get_mut(&user_id) {
+                            user.in_voice = false;
+                        }
+                    }
+                    VoiceClientEvent::UserLeftServer { user_id } => {
+                        self.participants.remove(&user_id);
+                    }
                 }
             }
+            _ => { println!("Ignoring event in RoomPage {:?}", message); }
         }
 
         Task::none()

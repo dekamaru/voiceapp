@@ -5,3 +5,4 @@ pub mod voice_decoder;
 pub use voice_client::{VoiceClient, VoiceClientError, VoiceClientEvent};
 pub use voice_encoder::{VoiceEncoder, OPUS_FRAME_SAMPLES, SAMPLE_RATE};
 pub use voice_decoder::{VoiceDecoder, VoiceDecoderError};
+pub use voiceapp_protocol::ParticipantInfo;
