@@ -10,7 +10,6 @@ mod icons;
 mod colors;
 mod pages;
 mod widgets;
-mod voice_messages;
 
 use colors::*;
 use pages::login::LoginPageMessage;
@@ -18,7 +17,6 @@ use pages::login::LoginPage;
 use pages::room::RoomPageMessage;
 use voiceapp_sdk::{VoiceClient, VoiceClientEvent};
 use crate::pages::room::RoomPage;
-use voice_messages::{VoiceCommand, VoiceCommandResult};
 use async_channel::Receiver;
 
 fn main() -> iced::Result {
@@ -50,6 +48,24 @@ enum Message {
     ExecuteVoiceCommand(VoiceCommand),
     VoiceCommandResult(VoiceCommandResult),
     ServerEventReceived(VoiceClientEvent)
+}
+
+#[derive(Debug, Clone)]
+pub enum VoiceCommand {
+    Connect {
+        management_addr: String,
+        voice_addr: String,
+        username: String,
+    },
+    JoinVoiceChannel,
+    LeaveVoiceChannel,
+}
+
+#[derive(Debug, Clone)]
+pub enum VoiceCommandResult {
+    Connect(Result<(), String>),
+    JoinVoiceChannel(Result<(), String>),
+    LeaveVoiceChannel(Result<(), String>),
 }
 
 trait Page {

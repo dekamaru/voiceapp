@@ -7,8 +7,12 @@ edition = "2021"
 name = "voiceapp-frontend"
 path = "src/main.rs"
 
+[profile.release]
+strip = true
+lto = true
+
 [dependencies]
 voiceapp-sdk = { path = "../sdk" }
 iced = { version = "0.13.1", features = ["tokio"] }
 tokio = { version = "1.48.0", features = ["full"] }
-async-channel = "2.3.1"
+async-channel = "2.5.0"

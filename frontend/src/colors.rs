@@ -18,6 +18,10 @@ pub fn text_primary() -> Color {
     Color::from_rgb8(242, 242, 242)
 }
 
+pub fn text_chat_header() -> Color {
+    Color::from_rgb8(116, 116, 116)
+}
+
 pub fn text_secondary() -> Color {
     Color::from_rgb8(76, 76, 76)
 }

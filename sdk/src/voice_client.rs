@@ -36,7 +36,7 @@ impl std::error::Error for VoiceClientError {}
 #[derive(Debug, Clone)]
 pub enum VoiceClientEvent {
     /// Initial participant list sent after successful connection
-    ParticipantsList(Vec<ParticipantInfo>),
+    ParticipantsList { user_id: u64, participants: Vec<ParticipantInfo> },
     /// A user joined the server
     UserJoinedServer { user_id: u64, username: String },
     /// A user joined a voice channel
@@ -186,7 +186,10 @@ impl VoiceClient {
         drop(state); // Release lock
 
         // Send initial participants list event
-        let _ = self.client_events_tx.send(VoiceClientEvent::ParticipantsList(participants_list)).await;
+        let _ = self.client_events_tx.send(VoiceClientEvent::ParticipantsList {
+            user_id: response.id,
+            participants: participants_list,
+        }).await;
 
         info!("[Management] Authenticated, user_id={}", response.id);
 

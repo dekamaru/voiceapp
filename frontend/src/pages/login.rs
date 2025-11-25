@@ -3,11 +3,10 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Family, Weight};
 use iced::widget::{button, container, row, stack, text, text_input, Space};
 use iced::widget::container::Style;
-use crate::{Message, Page};
+use crate::{Message, Page, VoiceCommand, VoiceCommandResult};
 use crate::colors::{color_error, container_bg, text_primary, text_secondary, text_selection};
 use crate::icons::Icons;
 use crate::widgets::Widgets;
-use crate::voice_messages::{VoiceCommand, VoiceCommandResult};
 
 #[derive(Default)]
 pub struct LoginPage {
@@ -56,7 +55,15 @@ impl LoginPage {
         let form = container(
             iced::widget::column!(
                 self.input("Voice server IP", &mut self.voice_url.clone(), LoginPageMessage::VoiceUrlChanged, LoginPageMessage::LoginSubmitted),
-                self.input_with_submit("Username", &mut self.username.clone(), LoginPageMessage::UsernameChanged, &mut self.form_filled.clone(), LoginPageMessage::LoginSubmitted)
+                Widgets::input_with_submit(
+                    "Username",
+                    &mut self.username.clone(),
+                    |v| LoginPageMessage::UsernameChanged(v).into(),
+                    self.form_filled,
+                    LoginPageMessage::LoginSubmitted.into(),
+                    262,
+                    48
+                )
             ).spacing(8)
         );
 
@@ -79,67 +86,6 @@ impl LoginPage {
             .padding(32);
 
         stack!(error_area, login_form).width(Length::Fill).height(Length::Fill)
-    }
-
-    fn input_with_submit(
-        &self,
-        placeholder: &str,
-        value: &mut String,
-        message: fn(String) -> LoginPageMessage,
-        active: &mut bool,
-        submit_message: LoginPageMessage
-    ) -> iced::widget::Container<Message> {
-        let container_style = |_theme: &iced::Theme| {
-            Style {
-                background: Some(Background::Color(container_bg())),
-                border: border::rounded(24),
-                ..Style::default()
-            }
-        };
-
-        let color = if *active {
-            text_primary()
-        } else {
-            text_secondary()
-        };
-
-        let circle_style = move |_theme: &iced::Theme| {
-            Style {
-                background: Some(Background::Color(color)),
-                border: border::rounded(40),
-                ..Style::default()
-            }
-        };
-
-        let input = text_input(placeholder, value)
-            .on_input(move |t| { message(t).into() })
-            .on_submit(submit_message.clone().into())
-            .padding(0)
-            .style(|_theme, _status| {
-                text_input::Style {
-                    background: Background::Color(Color::TRANSPARENT),
-                    border: Border::default(),
-                    icon: Color::TRANSPARENT,
-                    placeholder: text_secondary(),
-                    value: text_primary(),
-                    selection: text_selection()
-                }
-            });
-
-        let submit_button_container = container(Icons::arrow_right_solid(Color::BLACK, 16))
-            .width(24)
-            .height(24)
-            .align_x(Horizontal::Center)
-            .align_y(Vertical::Center)
-            .style(circle_style);
-
-        let submit_button = Widgets::container_button(submit_button_container).on_press(submit_message.clone().into());
-
-        container(row!(input, submit_button))
-            .width(262)
-            .height(48)
-            .padding(Padding {top: 13.0, right: 12.0, bottom: 12.0, left: 16.0})
-            .style(container_style)
     }
 
     fn input(&self, placeholder: &str, value: &mut String, message: fn(String) -> LoginPageMessage, submit_message: LoginPageMessage) -> iced::widget::Container<Message> {

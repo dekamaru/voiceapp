@@ -1,23 +1,25 @@
 use std::collections::HashMap;
-use iced::{border, font, Alignment, Background, Color, Element, Font, Length, Padding, Task, Theme};
+use iced::{border, font, Alignment, Background, Border, Color, Element, Font, Length, Padding, Task, Theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::border::Radius;
 use iced::font::Family;
-use iced::widget::{button, container, horizontal_rule, row, rule, text, vertical_rule, Space, column};
+use iced::widget::{button, container, horizontal_rule, row, rule, text, vertical_rule, Space, column, Container, scrollable, Scrollable};
 use iced::widget::button::Status;
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
+use iced::widget::scrollable::{Direction, Rail, Scrollbar, Scroller};
 use voiceapp_sdk::{VoiceClientEvent, ParticipantInfo};
 use crate::{Message, Page};
-use crate::colors::{color_alert, color_success, container_bg, debug_red, divider_bg, slider_bg, slider_thumb, text_primary, text_secondary};
+use crate::colors::{color_alert, color_success, container_bg, debug_red, divider_bg, slider_bg, slider_thumb, text_chat_header, text_primary, text_secondary};
 use crate::icons::Icons;
-use crate::voice_messages::{VoiceCommand, VoiceCommandResult};
+use crate::{VoiceCommand, VoiceCommandResult};
 use crate::widgets::Widgets;
 
 #[derive(Default)]
 pub struct RoomPage {
+    user_id: u64,
     muted: bool,
-    in_voice: bool,
+    chat_message: String,
     participants: HashMap<u64, ParticipantInfo>
 }
 
@@ -25,6 +27,8 @@ pub struct RoomPage {
 pub enum RoomPageMessage {
     MuteToggle,
     JoinLeaveToggle,
+    ChatMessageChanged(String),
+    ChatMessageSubmitted
 }
 
 impl Into<Message> for RoomPageMessage {
@@ -39,12 +43,6 @@ impl RoomPage {
     }
 
     fn main_screen(&self) -> iced::widget::Container<'static, Message> {
-        let bold = Font {
-            weight: font::Weight::Semibold,
-            family: Family::Name("Rubik SemiBold"),
-            ..Font::DEFAULT
-        };
-
         let rule_style = |_theme: &Theme| {
             rule::Style {
                 color: divider_bg(),
@@ -66,9 +64,11 @@ impl RoomPage {
             sidebar_column = sidebar_column.push(element);
         }
 
+        let is_in_voice = self.participants.get(&self.user_id).map(|p| p.in_voice).unwrap_or(false);
+
         let disconnect_button = container(
             Widgets::container_button(
-                container(text(if self.in_voice { "Disconnect" } else { "Join" }).size(14))
+                container(text(if is_in_voice { "Disconnect" } else { "Join" }).size(14))
                 .padding(Padding {top: 16.0, right: 24.0, bottom: 16.0, left: 24.0})
                 .align_x(Alignment::Center)
                 .align_y(Alignment::Center)
@@ -100,10 +100,71 @@ impl RoomPage {
             .width(214) // TODO: adaptive or not?
             .height(Length::Fill);
 
-        let chat_area = container("TODO: implement chat")
+        let messages_container = Scrollable::with_direction(
+            container(
+                column!(
+                    Self::chat_message("ShadowHunter".to_string(), "Привет ребята, кто готов к хорошей игровой сессии? Давайте соберёмся и покажем класс!".to_string(), "14:20".to_string()),
+                    Self::chat_message("VortexStrike".to_string(), "Привет! Я только что зашёл, готов играть. Какой режим выбираем, дм или обычный?".to_string(), "14:21".to_string()),
+                    Self::chat_message("NovaWings".to_string(), "Давайте на дм, там намного веселее и можно тренировать скилл в боевых ситуациях".to_string(), "14:22".to_string()),
+                    Self::chat_message("ShadowHunter".to_string(), "Хорошо, собирайтесь в лобби, скоро начнём. Убедитесь что у вас есть амуниция и утеплители".to_string(), "14:23".to_string()),
+                    Self::chat_message("VortexStrike".to_string(), "Я уже спавнился на стартовой позиции, жду остальных. Чекаю инвентарь, все хорошо".to_string(), "14:23".to_string()),
+                    Self::chat_message("CrimsonBlade".to_string(), "Ребята, у меня интернет нестабильный сейчас, лагаю немного. Может быть подождёте минутку-две?".to_string(), "14:24".to_string()),
+                    Self::chat_message("NovaWings".to_string(), "Нет проблем, ждём тебя. Используй время чтобы нормально подключиться, мы не спешим".to_string(), "14:25".to_string()),
+                    Self::chat_message("ShadowHunter".to_string(), "А где CrimsonBlade? Он говорил что идёт, но я его не вижу в лобби уже пять минут".to_string(), "14:26".to_string()),
+                    Self::chat_message("CrimsonBlade".to_string(), "Вот я, вот я! Прошу прощения за задержку, перезагружал роутер. Я готов начинать!".to_string(), "14:26".to_string()),
+                    Self::chat_message("VortexStrike".to_string(), "Окей, все собрались! Начинаем первый раунд, будьте внимательнее и действуйте как команда!".to_string(), "14:27".to_string()),
+                    Self::chat_message("NovaWings".to_string(), "Первый раунд начинается, все дружно движемся в сторону середины карты, держитесь вместе!".to_string(), "14:28".to_string()),
+                    Self::chat_message("ShadowHunter".to_string(), "Ха! Я успел убить трёх врагов подряд! Они совсем не ожидали нашей тактики".to_string(), "14:29".to_string()),
+                    Self::chat_message("CrimsonBlade".to_string(), "Ну ты даёшь 😅 Как ты так быстро? Я еле двух подобрал в этом раунде".to_string(), "14:30".to_string()),
+                    Self::chat_message("VortexStrike".to_string(), "Осторожно за углом, враги занимают позицию! Не идите туда, обойдём их с фланга!".to_string(), "14:31".to_string()),
+                    Self::chat_message("NovaWings".to_string(), "Мне хилов не хватает, уже на четверти здоровья. Кто-нибудь может прикрыть меня?".to_string(), "14:32".to_string()),
+                    Self::chat_message("ShadowHunter".to_string(), "Держи аптечку и энергетик! Я их только что подобрал у павших врагов, бегу к тебе".to_string(), "14:32".to_string()),
+                    Self::chat_message("CrimsonBlade".to_string(), "Второй раунд скоро закончится. Как вам игра? Может быть ещё один или уже домой?".to_string(), "14:35".to_string()),
+                    Self::chat_message("VortexStrike".to_string(), "Ещё одну! Я разогрелся уже и вошёл в ритм, хочу закончить на победе!".to_string(), "14:35".to_string()),
+                    Self::chat_message("NovaWings".to_string(), "Согласен, давайте финальный раунд. Постараемся выиграть и закончить сессию красиво!".to_string(), "14:36".to_string()),
+                    Self::chat_message("ShadowHunter".to_string(), "Идёт! На победу, друзья! Покажем им на что мы способны! 🔥".to_string(), "14:37".to_string()),
+                )
+            ).padding(Padding { right: 16.0, bottom: 16.0, left: 16.0, top: 0.0 }),
+            Direction::Vertical(Scrollbar::new().width(4).margin(2).scroller_width(2))
+        ).height(Length::Fill).style(|theme, status| {
+            let rail = Rail {
+                background: Some(Background::Color(Color::TRANSPARENT)),
+                border: Border::default(),
+                scroller: Scroller {
+                    color: text_chat_header(),
+                    border: border::rounded(12)
+                }
+            };
+
+            scrollable::Style {
+                container: Style {
+                    background: Some(Background::Color(Color::TRANSPARENT)),
+                    ..Style::default()
+                },
+                vertical_rail: rail,
+                horizontal_rail: rail,
+                gap: None
+            }
+        });
+
+        let chat_area = container(
+            column!(
+                messages_container,
+                container(
+                    Widgets::input_with_submit(
+                        "Send message...",
+                        &mut self.chat_message.clone(),
+                        |v| RoomPageMessage::ChatMessageChanged(v).into(),
+                        !self.chat_message.is_empty(),
+                        RoomPageMessage::ChatMessageSubmitted.into(),
+                        Length::Fill,
+                        48
+                    )
+                ).padding(Padding { right: 16.0, bottom: 16.0, left: 16.0, top: 0.0 })
+            )
+        )
             .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(24);
+            .height(Length::Fill);
 
         let main_content_area = container(
             row!(
@@ -133,6 +194,19 @@ impl RoomPage {
         );
 
         container(window_area).width(Length::Fill).height(Length::Fill)
+    }
+
+    fn chat_message<'a>(username: String, message: String, time: String) -> Container<'a, Message> {
+        container(
+            column!(
+                row!(
+                    text(username).color(text_chat_header()).size(12),
+                    Space::with_width(Length::Fill),
+                    text(time).color(text_chat_header()).size(12)
+                ),
+                text(message).color(text_primary()).size(14)
+            ).spacing(4)
+        ).padding(8)
     }
 
     fn mute_slider<'a>(muted: bool) -> iced::widget::Button<'a, Message> {
@@ -255,11 +329,19 @@ impl Page for RoomPage {
                         self.muted = !self.muted;
                     }
                     RoomPageMessage::JoinLeaveToggle => {
-                        if self.in_voice {
+                        let is_in_voice = self.participants.get(&self.user_id).map(|p| p.in_voice).unwrap_or(false);
+                        if is_in_voice {
                             return Task::done(Message::ExecuteVoiceCommand(VoiceCommand::LeaveVoiceChannel))
                         }
 
                         return Task::done(Message::ExecuteVoiceCommand(VoiceCommand::JoinVoiceChannel));
+                    }
+                    RoomPageMessage::ChatMessageChanged(value) => {
+                        // TODO: validate (restrict max chars?)
+                        self.chat_message = value;
+                    }
+                    RoomPageMessage::ChatMessageSubmitted => {
+                        println!("Chat message submit!")
                     }
                 }
             },
@@ -267,14 +349,18 @@ impl Page for RoomPage {
                 match result {
                     VoiceCommandResult::JoinVoiceChannel(status) => {
                         if status.is_ok() {
-                            self.in_voice = true;
+                            if let Some(user) = self.participants.get_mut(&self.user_id) {
+                                user.in_voice = true;
+                            }
                         } else {
                             println!("FAILED TO JOIN VOICE: {}", status.err().unwrap());
                         }
                     }
                     VoiceCommandResult::LeaveVoiceChannel(status) => {
                         if status.is_ok() {
-                            self.in_voice = false;
+                            if let Some(user) = self.participants.get_mut(&self.user_id) {
+                                user.in_voice = false;
+                            }
                         } else {
                             println!("FAILED TO LEAVE VOICE: {}", status.err().unwrap());
                         }
@@ -284,8 +370,9 @@ impl Page for RoomPage {
             }
             Message::ServerEventReceived(event) => {
                 match event {
-                    VoiceClientEvent::ParticipantsList(list) => {
-                        self.participants = list.into_iter()
+                    VoiceClientEvent::ParticipantsList { user_id, participants } => {
+                        self.user_id = user_id;
+                        self.participants = participants.into_iter()
                             .map(|info| (info.user_id, info))
                             .collect();
                     }
