@@ -59,6 +59,13 @@ pub fn encode_leave_voice_channel_response(success: bool) -> Vec<u8> {
     serialize_packet(PacketId::LeaveVoiceChannelResponse, &payload)
 }
 
+/// Encode chat message response packet
+/// Format: [packet_id: u8][payload_len: u16][status: u8]
+pub fn encode_chat_message_response(status: bool) -> Vec<u8> {
+    let payload = vec![if status { 1u8 } else { 0u8 }];
+    serialize_packet(PacketId::ChatMessageResponse, &payload)
+}
+
 // Decode functions
 
 /// Decode login response payload
@@ -149,6 +156,19 @@ pub fn decode_leave_voice_channel_response(data: &[u8]) -> io::Result<bool> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "leave voice response payload too short",
+        ));
+    }
+
+    Ok(data[0] != 0)
+}
+
+/// Decode chat message response payload
+/// Format: [status: u8]
+pub fn decode_chat_message_response(data: &[u8]) -> io::Result<bool> {
+    if data.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "chat message response payload too short",
         ));
     }
 

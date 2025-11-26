@@ -53,6 +53,16 @@ pub fn encode_leave_voice_channel_request() -> Vec<u8> {
     serialize_packet(PacketId::LeaveVoiceChannelRequest, &[])
 }
 
+/// Encode chat message request packet
+/// Format: [packet_id: u8][payload_len: u16][message_len: u16 BE][message...]
+pub fn encode_chat_message_request(message: &str) -> Vec<u8> {
+    let mut payload = Vec::new();
+    let message_bytes = message.as_bytes();
+    payload.extend_from_slice(&(message_bytes.len() as u16).to_be_bytes());
+    payload.extend_from_slice(message_bytes);
+    serialize_packet(PacketId::ChatMessageRequest, &payload)
+}
+
 // Decode functions
 
 /// Decode login request payload
@@ -102,4 +112,27 @@ pub fn decode_voice_data(data: &[u8]) -> io::Result<VoiceData> {
         ssrc,
         opus_frame,
     })
+}
+
+/// Decode chat message request payload
+/// Format: [message_len: u16 BE][message...]
+pub fn decode_chat_message_request(data: &[u8]) -> io::Result<String> {
+    if data.len() < 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "chat message request too short",
+        ));
+    }
+
+    let message_len = u16::from_be_bytes(data[0..2].try_into().unwrap()) as usize;
+
+    if data.len() < 2 + message_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "incomplete message in chat message request",
+        ));
+    }
+
+    String::from_utf8(data[2..2 + message_len].to_vec())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid UTF-8 in message"))
 }

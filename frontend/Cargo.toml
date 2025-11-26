@@ -16,3 +16,4 @@ voiceapp-sdk = { path = "../sdk" }
 iced = { version = "0.13.1", features = ["tokio"] }
 tokio = { version = "1.48.0", features = ["full"] }
 async-channel = "2.5.0"
+chrono = { version = "0.4.42", features = ["clock"] }

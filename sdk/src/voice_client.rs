@@ -45,6 +45,8 @@ pub enum VoiceClientEvent {
     UserLeftVoice { user_id: u64 },
     /// A user left the server
     UserLeftServer { user_id: u64 },
+    /// A user sent a chat message
+    UserSentMessage { user_id: u64, timestamp: u64, message: String },
 }
 
 /// Client-side state for voice connection
@@ -298,6 +300,30 @@ impl VoiceClient {
         Ok(())
     }
 
+    pub async fn send_message(&mut self, message: &str) -> Result<(), VoiceClientError> {
+        debug!("Sending chat message");
+
+        // Encode and send ChatMessageRequest
+        let payload = voiceapp_protocol::encode_chat_message_request(message);
+
+        self.request_tx
+            .send(payload)
+            .await
+            .map_err(|_| VoiceClientError::Disconnected)?;
+
+        // Wait for response
+        let _success = self
+            .wait_for_response_with(
+                PacketId::ChatMessageResponse,
+                5,
+                voiceapp_protocol::decode_chat_message_response,
+            )
+            .await?;
+
+        debug!("Chat message sent successfully");
+        Ok(())
+    }
+
     /// Get a sender for raw voice samples (Vec<f32>)
     /// Returns a cloneable sender that can be moved into async tasks
     pub fn voice_input_sender(&self) -> Sender<Vec<f32>> {
@@ -510,6 +536,19 @@ impl VoiceClient {
                 debug!("User left voice: id={}", user_id);
                 Ok(())
             }
+            PacketId::UserSentMessage => {
+                let (user_id, timestamp, message) = voiceapp_protocol::decode_user_sent_message(&payload)
+                    .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
+
+                let _ = client_events_tx.send(VoiceClientEvent::UserSentMessage {
+                    user_id,
+                    timestamp,
+                    message: message.clone(),
+                }).await;
+
+                debug!("User sent message: id={}, timestamp={}", user_id, timestamp);
+                Ok(())
+            }
             _ => {
                 debug!("Ignoring unexpected event: {:?}", packet_id);
                 Ok(())
@@ -587,18 +626,20 @@ async fn tcp_handler(
 
                 // Route to appropriate channel
                 match packet_id {
-                    // Responses (0x11-0x14)
+                    // Responses (0x11-0x15)
                     PacketId::LoginResponse
                     | PacketId::VoiceAuthResponse
                     | PacketId::JoinVoiceChannelResponse
-                    | PacketId::LeaveVoiceChannelResponse => {
+                    | PacketId::LeaveVoiceChannelResponse
+                    | PacketId::ChatMessageResponse => {
                         response_tx.send((packet_id, payload.to_vec())).await?;
                     }
-                    // Events (0x21-0x24)
+                    // Events (0x21-0x25)
                     PacketId::UserJoinedServer
                     | PacketId::UserJoinedVoice
                     | PacketId::UserLeftVoice
-                    | PacketId::UserLeftServer => {
+                    | PacketId::UserLeftServer
+                    | PacketId::UserSentMessage => {
                         let _ = event_tx.send((packet_id, payload.to_vec())).await;
                     }
                     // Unexpected packets

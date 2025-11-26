@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, RwLock};
@@ -10,6 +11,8 @@ use voiceapp_protocol::{
     encode_user_joined_server, encode_user_left_server,
     encode_user_joined_voice, encode_user_left_voice,
     encode_join_voice_channel_response, encode_leave_voice_channel_response,
+    decode_chat_message_request, encode_chat_message_response,
+    encode_user_sent_message,
 };
 use std::collections::HashMap;
 use rand::random;
@@ -178,6 +181,11 @@ impl ManagementServer {
                     PacketId::LeaveVoiceChannelRequest => {
                         if let Err(e) = self.handle_leave_voice_channel_request(socket, peer_addr).await {
                             error!("[{}] Failed to handle leave voice channel request: {}", peer_addr, e);
+                        }
+                    }
+                    PacketId::ChatMessageRequest => {
+                        if let Err(e) = self.handle_chat_message_request(socket, peer_addr, &payload).await {
+                            error!("[{}] Failed to handle chat message request: {}", peer_addr, e);
                         }
                     }
                     _ => {
@@ -390,5 +398,49 @@ impl ManagementServer {
         } else {
             debug!("[{}] User disconnected but was not in users map", peer_addr);
         }
+    }
+
+    /// Handle chat message request: send response to caller and broadcast event with current UTC timestamp to all clients
+    async fn handle_chat_message_request(
+        &self,
+        socket: &mut TcpStream,
+        peer_addr: SocketAddr,
+        payload: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Decode the chat message
+        let message = decode_chat_message_request(payload)?;
+
+        // Get user ID
+        let user_id = {
+            let users_lock = self.users.read().await;
+            if let Some(user) = users_lock.get(&peer_addr) {
+                user.id
+            } else {
+                return Err("User not found in users map".into());
+            }
+        };
+
+        // Send response to caller with success status
+        let response_packet = encode_chat_message_response(true);
+        socket.write_all(&response_packet).await?;
+        socket.flush().await?;
+
+        // Get current UTC timestamp in milliseconds since epoch
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)?
+            .as_millis() as u64;
+
+        // Broadcast user sent message event to all clients (including sender)
+        let message_packet = encode_user_sent_message(user_id, timestamp, &message);
+        let broadcast_msg = BroadcastMessage {
+            sender_addr: None, // Server-initiated broadcast
+            for_all: true,     // Send to all clients
+            packet_data: message_packet,
+        };
+        let _ = self.broadcast_tx.send(broadcast_msg);
+
+        debug!("[{}] User sent message: id={}, len={}", peer_addr, user_id, message.len());
+
+        Ok(())
     }
 }

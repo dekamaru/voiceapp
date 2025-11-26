@@ -59,6 +59,7 @@ pub enum VoiceCommand {
     },
     JoinVoiceChannel,
     LeaveVoiceChannel,
+    SendChatMessage(String),
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +67,7 @@ pub enum VoiceCommandResult {
     Connect(Result<(), String>),
     JoinVoiceChannel(Result<(), String>),
     LeaveVoiceChannel(Result<(), String>),
+    SendChatMessage(Result<(), String>),
 }
 
 trait Page {
@@ -147,6 +149,19 @@ impl Application {
                     },
                     move |result| {
                         Message::VoiceCommandResult(VoiceCommandResult::LeaveVoiceChannel(
+                            result.map_err(|e| e.to_string())
+                        ))
+                    }
+                )
+            }
+            VoiceCommand::SendChatMessage(message) => {
+                Task::perform(
+                    async move {
+                        let mut guard = client.lock().await;
+                        guard.send_message(&message).await
+                    },
+                    move |result| {
+                        Message::VoiceCommandResult(VoiceCommandResult::SendChatMessage(
                             result.map_err(|e| e.to_string())
                         ))
                     }
