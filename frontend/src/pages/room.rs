@@ -1,8 +1,7 @@
 use std::collections::{HashMap, BTreeMap};
-use iced::{border, font, widget, Alignment, Background, Border, Color, Element, Font, Length, Padding, Task, Theme};
+use iced::{border, Alignment, Background, Border, Color, Element, Length, Padding, Task, Theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::border::Radius;
-use iced::font::Family;
 use iced::widget::{button, container, horizontal_rule, row, rule, text, vertical_rule, Space, column, Container, scrollable, Scrollable};
 use iced::widget::button::Status;
 use iced::widget::container::Style;
@@ -15,6 +14,7 @@ use crate::icons::Icons;
 use crate::{VoiceCommand, VoiceCommandResult};
 use crate::widgets::Widgets;
 use chrono::{DateTime, Utc, Local};
+use tracing::{debug, warn};
 
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
@@ -373,7 +373,7 @@ impl Page for RoomPage {
                                 user.in_voice = true;
                             }
                         } else {
-                            println!("FAILED TO JOIN VOICE: {}", status.err().unwrap());
+                            warn!("Failed to join voice: {}", status.err().unwrap());
                         }
                     }
                     VoiceCommandResult::LeaveVoiceChannel(status) => {
@@ -382,15 +382,15 @@ impl Page for RoomPage {
                                 user.in_voice = false;
                             }
                         } else {
-                            println!("FAILED TO LEAVE VOICE: {}", status.err().unwrap());
+                            warn!("Failed to leave voice: {}", status.err().unwrap());
                         }
                     }
                     VoiceCommandResult::SendChatMessage(status) => {
                         if let Err(e) = status {
-                            println!("FAILED TO SEND MESSAGE: {}", e);
+                            warn!("Failed to send message: {}", e);
                         }
                     }
-                    _ => { println!("ignoring voice command result in room page: {:?}", result); }
+                    _ => { debug!("Ignoring voice command result in room page: {:?}", result); }
                 }
             }
             Message::ServerEventReceived(event) => {
@@ -402,7 +402,7 @@ impl Page for RoomPage {
                             .collect();
                     }
                     VoiceClientEvent::UserJoinedServer { user_id, username } => {
-                        println!("User {} joined server.", username);
+                        debug!("User {} joined server", username);
                         self.participants.insert(user_id, voiceapp_sdk::ParticipantInfo {
                             user_id,
                             username,
@@ -410,19 +410,19 @@ impl Page for RoomPage {
                         });
                     }
                     VoiceClientEvent::UserJoinedVoice { user_id } => {
-                        println!("User {} joined voice.", user_id);
+                        debug!("User {} joined voice", user_id);
                         if let Some(user) = self.participants.get_mut(&user_id) {
                             user.in_voice = true;
                         }
                     }
                     VoiceClientEvent::UserLeftVoice { user_id } => {
-                        println!("User {} left voice.", user_id);
+                        debug!("User {} left voice", user_id);
                         if let Some(user) = self.participants.get_mut(&user_id) {
                             user.in_voice = false;
                         }
                     }
                     VoiceClientEvent::UserLeftServer { user_id } => {
-                        println!("User {} left server.", user_id);
+                        debug!("User {} left server", user_id);
                         self.participants.remove(&user_id);
                     }
                     VoiceClientEvent::UserSentMessage { user_id, timestamp, message } => {
@@ -435,7 +435,7 @@ impl Page for RoomPage {
                     }
                 }
             }
-            _ => { println!("Ignoring event in RoomPage {:?}", message); }
+            _ => { debug!("Ignoring event in RoomPage {:?}", message); }
         }
 
         Task::none()

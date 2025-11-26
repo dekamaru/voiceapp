@@ -3,6 +3,7 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Family, Weight};
 use iced::widget::{button, container, row, stack, text, text_input, Space};
 use iced::widget::container::Style;
+use tracing::debug;
 use crate::{Message, Page, VoiceCommand, VoiceCommandResult};
 use crate::colors::{color_error, container_bg, text_primary, text_secondary, text_selection};
 use crate::icons::Icons;
@@ -164,7 +165,7 @@ impl Page for LoginPage {
                 }
             }
             _ => {
-                println!("Ignored message in login page: {:?}", message);
+                debug!("Ignored message in login page: {:?}", message);
             }
         }
         Task::none()

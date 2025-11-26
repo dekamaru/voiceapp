@@ -5,6 +5,8 @@ use iced::theme::Palette;
 use iced::window::settings::PlatformSpecific;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::{debug, info};
+use tracing_subscriber;
 
 mod icons;
 mod colors;
@@ -20,6 +22,20 @@ use crate::pages::room::RoomPage;
 use async_channel::Receiver;
 
 fn main() -> iced::Result {
+    // Initialize tracing
+    #[cfg(debug_assertions)]
+    {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_target(false)
+            .init();
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .init();
+    }
     let theme = |_state: &Application| {
         Theme::custom("dark".to_string(), Palette {
             background: background_dark(),
