@@ -1,17 +1,15 @@
-use iced::{stream, window, Font, Settings, Subscription, Task, Theme};
-use iced::application::Appearance;
+use iced::{Font, Task, Theme};
 use iced::Theme::Dark;
 use iced::theme::Palette;
-use iced::window::settings::PlatformSpecific;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, info};
 use tracing_subscriber;
 
 mod icons;
 mod colors;
 mod pages;
 mod widgets;
+mod audio;
 
 use colors::*;
 use pages::login::LoginPageMessage;
@@ -20,22 +18,13 @@ use pages::room::RoomPageMessage;
 use voiceapp_sdk::{VoiceClient, VoiceClientEvent};
 use crate::pages::room::RoomPage;
 use async_channel::Receiver;
+use crate::audio::AudioManager;
 
 fn main() -> iced::Result {
-    // Initialize tracing
-    #[cfg(debug_assertions)]
-    {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_target(false)
-            .init();
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .init();
-    }
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+    
     let theme = |_state: &Application| {
         Theme::custom("dark".to_string(), Palette {
             background: background_dark(),
@@ -95,18 +84,21 @@ struct Application {
     page: Box<dyn Page>,
     voice_client: Arc<Mutex<VoiceClient>>,
     events_rx: Receiver<VoiceClientEvent>,
+    audio_manager: AudioManager,
 }
 
 impl Application {
     fn new() -> (Self, Task<Message>) {
         let voice_client = VoiceClient::new().expect("failed to init voice client");
+        let audio_manager = AudioManager::new(voice_client.voice_input_sender(), voice_client.get_decoder());
         let events_rx = voice_client.event_stream();
 
         (
             Self {
                 page: Box::new(LoginPage::new()),
                 voice_client: Arc::new(Mutex::new(voice_client)),
-                events_rx
+                events_rx,
+                audio_manager
             },
             Task::none()
         )
@@ -122,6 +114,26 @@ impl Application {
             Message::VoiceCommandResult(VoiceCommandResult::Connect(Ok(()))) => {
                 self.page = Box::new(RoomPage::new());
                 Task::run(self.events_rx.clone(), |e| { Message::ServerEventReceived(e) })
+            }
+            Message::VoiceCommandResult(VoiceCommandResult::JoinVoiceChannel(Ok(()))) => {
+                // Start audio when join succeeds
+                if let Err(e) = self.audio_manager.start_playback() {
+                    tracing::error!("Failed to start audio playback: {}", e);
+                }
+                if let Err(e) = self.audio_manager.start_recording() {
+                    tracing::error!("Failed to start recording: {}", e);
+                }
+
+                // propagate further
+                self.page.update(message)
+            }
+            Message::VoiceCommandResult(VoiceCommandResult::LeaveVoiceChannel(Ok(()))) => {
+                // Stop audio when leave succeeds
+                self.audio_manager.stop_recording();
+                self.audio_manager.stop_playback();
+
+                // propagate further
+                self.page.update(message)
             }
             other => self.page.update(other),
         }
@@ -147,8 +159,8 @@ impl Application {
             VoiceCommand::JoinVoiceChannel => {
                 Task::perform(
                     async move {
-                        let mut guard = client.lock().await;
-                        guard.join_channel().await
+                        let mut client_lock = client.lock().await;
+                        client_lock.join_channel().await
                     },
                     move |result| {
                         Message::VoiceCommandResult(VoiceCommandResult::JoinVoiceChannel(
