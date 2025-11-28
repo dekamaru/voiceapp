@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 const TARGET_SAMPLE_RATE: u32 = 48000;
-const AUDIO_BUFFER_CAPACITY: usize = 48000; // ~1000ms at 48kHz - larger buffer to prevent callback blocking
 
 /// Audio frame: mono F32 samples at 48kHz
 pub type AudioFrame = Vec<f32>;
@@ -106,7 +105,7 @@ fn stereo_to_mono(stereo: &[f32], channels: u16) -> Vec<f32> {
 
 /// Create input stream that captures audio and sends frames through channel
 /// Returns the stream (to keep it alive) and a receiver for audio frames
-pub fn create_input_stream() -> Result<(Stream, mpsc::Receiver<AudioFrame>), Box<dyn std::error::Error>> {
+pub fn create_input_stream() -> Result<(Stream, SampleRate, mpsc::Receiver<AudioFrame>), Box<dyn std::error::Error>> {
     let device = find_input_device()?;
     let (config, format) = get_stream_config(&device)?;
 
@@ -115,29 +114,18 @@ pub fn create_input_stream() -> Result<(Stream, mpsc::Receiver<AudioFrame>), Box
         config.channels, config.sample_rate.0, format
     );
 
-    let (tx, rx) = mpsc::channel::<AudioFrame>(AUDIO_BUFFER_CAPACITY / 480); // ~100 frames buffer at 48kHz
-
-    // Track dropped frames to detect callback blockage
-    let dropped_frames = Arc::new(AtomicUsize::new(0));
+    let (tx, rx) = mpsc::channel::<AudioFrame>(100);
 
     let channels = config.channels;
 
     // Match on sample format to build the appropriate stream
     let stream = match format {
         SampleFormat::F32 => {
-            let dropped_frames = dropped_frames.clone();
             device.build_input_stream(
                 &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     let mono_samples = stereo_to_mono(data, channels);
-                    // Use try_send() to NEVER block the audio callback
-                    // Dropping frames is better than blocking the audio system
-                    if let Err(_) = tx.try_send(mono_samples) {
-                        let dropped = dropped_frames.fetch_add(1, Ordering::Relaxed);
-                        if dropped % 100 == 0 {
-                            warn!("Input buffer full, dropped audio frames (count={})", dropped + 1);
-                        }
-                    }
+                    let _ = tx.try_send(mono_samples);
                 },
                 move |err| {
                     error!("Input stream error: {}", err);
@@ -146,7 +134,6 @@ pub fn create_input_stream() -> Result<(Stream, mpsc::Receiver<AudioFrame>), Box
             )?
         }
         SampleFormat::I16 => {
-            let dropped_frames = dropped_frames.clone();
             device.build_input_stream(
                 &config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
@@ -154,12 +141,7 @@ pub fn create_input_stream() -> Result<(Stream, mpsc::Receiver<AudioFrame>), Box
                     let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
                     let mono_samples = stereo_to_mono(&f32_data, channels);
                     // Use try_send() to NEVER block the audio callback
-                    if let Err(_) = tx.try_send(mono_samples) {
-                        let dropped = dropped_frames.fetch_add(1, Ordering::Relaxed);
-                        if dropped % 100 == 0 {
-                            warn!("Input buffer full, dropped audio frames (count={})", dropped + 1);
-                        }
-                    }
+                    let _ = tx.try_send(mono_samples);
                 },
                 move |err| {
                     error!("Input stream error: {}", err);
@@ -168,7 +150,6 @@ pub fn create_input_stream() -> Result<(Stream, mpsc::Receiver<AudioFrame>), Box
             )?
         }
         SampleFormat::U16 => {
-            let dropped_frames = dropped_frames.clone();
             device.build_input_stream(
                 &config,
                 move |data: &[u16], _: &cpal::InputCallbackInfo| {
@@ -179,12 +160,7 @@ pub fn create_input_stream() -> Result<(Stream, mpsc::Receiver<AudioFrame>), Box
                         .collect();
                     let mono_samples = stereo_to_mono(&f32_data, channels);
                     // Use try_send() to NEVER block the audio callback
-                    if let Err(_) = tx.try_send(mono_samples) {
-                        let dropped = dropped_frames.fetch_add(1, Ordering::Relaxed);
-                        if dropped % 100 == 0 {
-                            warn!("Input buffer full, dropped audio frames (count={})", dropped + 1);
-                        }
-                    }
+                    let _ = tx.try_send(mono_samples);
                 },
                 move |err| {
                     error!("Input stream error: {}", err);
@@ -201,5 +177,5 @@ pub fn create_input_stream() -> Result<(Stream, mpsc::Receiver<AudioFrame>), Box
     stream.play()?;
     debug!("Input stream started");
 
-    Ok((stream, rx))
+    Ok((stream, config.sample_rate, rx))
 }

@@ -4,7 +4,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::RwLock;
 use async_channel::{Sender, Receiver, unbounded};
-use tracing::{debug, error, info};
+use rubato::{FftFixedIn, Resampler};
+use tracing::{debug, error, info, warn};
 
 use voiceapp_protocol::{PacketId, ParticipantInfo};
 use crate::voice_encoder::{VoiceEncoder, OPUS_FRAME_SAMPLES};
@@ -57,6 +58,15 @@ struct ClientState {
     in_voice_channel: bool,
 }
 
+pub struct VoiceFrame {
+    sample_rate: usize,
+    samples: Vec<f32>
+}
+
+impl VoiceFrame {
+    pub fn new(sample_rate: usize, samples: Vec<f32>) -> Self { Self { sample_rate, samples } }
+}
+
 /// The VoiceClient for managing voice connections
 pub struct VoiceClient {
     state: Arc<RwLock<ClientState>>,
@@ -66,8 +76,8 @@ pub struct VoiceClient {
     response_rx: Receiver<(PacketId, Vec<u8>)>,
     event_tx: Sender<(PacketId, Vec<u8>)>,
     event_rx: Receiver<(PacketId, Vec<u8>)>,
-    voice_input_tx: Sender<Vec<f32>>,
-    voice_input_rx: Receiver<Vec<f32>>,
+    voice_input_tx: Sender<VoiceFrame>,
+    voice_input_rx: Receiver<VoiceFrame>,
     decoder: Arc<VoiceDecoder>,
     udp_send_tx: Sender<Vec<u8>>,
     udp_send_rx: Receiver<Vec<u8>>,
@@ -326,7 +336,7 @@ impl VoiceClient {
 
     /// Get a sender for raw voice samples (Vec<f32>)
     /// Returns a cloneable sender that can be moved into async tasks
-    pub fn voice_input_sender(&self) -> Sender<Vec<f32>> {
+    pub fn voice_input_sender(&self) -> Sender<VoiceFrame> {
         self.voice_input_tx.clone()
     }
 
@@ -361,7 +371,7 @@ impl VoiceClient {
     }
 
     /// Spawn voice transmitter task that encodes audio frames and sends them over UDP
-    fn spawn_voice_transmitter(&self, voice_input_rx: Receiver<Vec<f32>>, udp_send_tx: Sender<Vec<u8>>) {
+    fn spawn_voice_transmitter(&self, voice_input_rx: Receiver<VoiceFrame>, udp_send_tx: Sender<Vec<u8>>) {
         tokio::spawn(async move {
             let mut codec = match VoiceEncoder::new() {
                 Ok(c) => c,
@@ -372,17 +382,69 @@ impl VoiceClient {
             };
 
             // Buffer to accumulate samples until we have OPUS_FRAME_SAMPLES
-            let mut sample_buffer = Vec::with_capacity(OPUS_FRAME_SAMPLES * 2);
+            let mut sample_send_buffer = Vec::with_capacity(OPUS_FRAME_SAMPLES * 2);
+
+            let mut resample_send_buffer = Vec::with_capacity(1024);
+            let mut resample_out_buffer = Vec::with_capacity(4096);
+            let mut current_sample_rate: usize = TARGET_SAMPLE_RATE;
+
+            let mut resamplers: HashMap<usize, FftFixedIn<f32>> = HashMap::new();
+
+            const TARGET_SAMPLE_RATE: usize = 48000;
+            const RESAMPLER_CHUNK_SIZE: usize = 512;
 
             loop {
                 match voice_input_rx.recv().await {
-                    Ok(samples) => {
-                        // Add received samples to buffer
-                        sample_buffer.extend_from_slice(&samples);
+                    Ok(frame) => {
+                        // We accumulate data for resampler if it's needed
+                        if frame.sample_rate != TARGET_SAMPLE_RATE {
+
+                            // Clear buffer if sample rate has been changed
+                            if current_sample_rate != frame.sample_rate {
+                                resample_send_buffer.clear();
+                                if resamplers.contains_key(&frame.sample_rate) {
+                                    warn!("Resampler reset for {} ", frame.sample_rate);
+                                    resamplers.get_mut(&frame.sample_rate).unwrap().reset()
+                                }
+                                warn!("Cleared resample buffer because of the switch from {} -> {} ", current_sample_rate, frame.sample_rate);
+                                current_sample_rate = frame.sample_rate;
+                            }
+
+                            resample_send_buffer.extend_from_slice(&frame.samples);
+                        } else {
+                            // just add to the send buffer
+                            sample_send_buffer.extend_from_slice(&frame.samples);
+                        }
+
+                        while resample_send_buffer.len() >= RESAMPLER_CHUNK_SIZE {
+                            let mut resampler = if resamplers.contains_key(&current_sample_rate) {
+                                resamplers.get(&current_sample_rate).unwrap()
+                            } else {
+                                let resampler = FftFixedIn::<f32>::new(
+                                    current_sample_rate,
+                                    TARGET_SAMPLE_RATE,
+                                    RESAMPLER_CHUNK_SIZE,
+                                    1, // no chunk split
+                                    1 // mono
+                                ).expect("cannot create resampler");
+
+                                &resamplers.insert(current_sample_rate, resampler).expect("cannot save resampler")
+                            };
+
+                            match resampler.process_into_buffer(resample_send_buffer, &mut resample_out_buffer, None) {
+                                Ok((_, resampled_size)) => {
+                                    info!("Resampled {} samples", resampled_size);
+                                    sample_send_buffer.extend_from_slice(resample_out_buffer.drain(0..resampled_size).as_slice());
+                                },
+                                Err(e) => {
+                                    error!("Error resampling frame: {}", e);
+                                }
+                            }
+                        }
 
                         // Encode complete frames
-                        while sample_buffer.len() >= OPUS_FRAME_SAMPLES {
-                            let frame: Vec<f32> = sample_buffer.drain(0..OPUS_FRAME_SAMPLES).collect();
+                        while sample_send_buffer.len() >= OPUS_FRAME_SAMPLES {
+                            let frame: Vec<f32> = sample_send_buffer.drain(0..OPUS_FRAME_SAMPLES).collect();
 
                             match codec.encode(&frame) {
                                 Ok(Some(packet)) => {
@@ -408,9 +470,10 @@ impl VoiceClient {
                     }
                     Err(_) => {
                         // Channel closed, encode and send any remaining samples
-                        if !sample_buffer.is_empty() {
-                            debug!("Encoding {} remaining samples", sample_buffer.len());
-                            match codec.encode(&sample_buffer) {
+                        if !sample_send_buffer.is_empty() {
+                            debug!("Encoding {} remaining samples", sample_send_buffer.len());
+
+                            match codec.encode(&sample_send_buffer) {
                                 Ok(Some(packet)) => {
                                     let encoded = voiceapp_protocol::encode_voice_data(&packet);
                                     let _ = udp_send_tx.send(encoded).await;

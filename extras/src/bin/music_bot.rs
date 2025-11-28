@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{error, info};
+use voiceapp_sdk::voice_client::VoiceFrame;
 use voiceapp_sdk::VoiceClient;
 
 #[tokio::main]
@@ -98,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|&sample| sample as f32 / 32768.0)
             .collect();
 
-        if voice_input_tx.send(float_frame).await.is_err() {
+        if voice_input_tx.send(VoiceFrame::new(48000, float_frame)).await.is_err() {
             info!("Voice input channel closed, stopping stream");
             break;
         }
