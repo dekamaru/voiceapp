@@ -417,9 +417,7 @@ impl VoiceClient {
                         }
 
                         while resample_send_buffer.len() >= RESAMPLER_CHUNK_SIZE {
-                            let mut resampler = if resamplers.contains_key(&current_sample_rate) {
-                                resamplers.get(&current_sample_rate).unwrap()
-                            } else {
+                            if !resamplers.contains_key(&current_sample_rate) {
                                 let resampler = FftFixedIn::<f32>::new(
                                     current_sample_rate,
                                     TARGET_SAMPLE_RATE,
@@ -427,11 +425,15 @@ impl VoiceClient {
                                     1, // no chunk split
                                     1 // mono
                                 ).expect("cannot create resampler");
+                                resamplers.insert(current_sample_rate, resampler);
+                            }
 
-                                &resamplers.insert(current_sample_rate, resampler).expect("cannot save resampler")
-                            };
+                            let resampler = resamplers.get_mut(&current_sample_rate).unwrap();
 
-                            match resampler.process_into_buffer(resample_send_buffer, &mut resample_out_buffer, None) {
+                            // Drain exactly RESAMPLER_CHUNK_SIZE samples for this iteration
+                            let input_chunk: Vec<f32> = resample_send_buffer.drain(0..RESAMPLER_CHUNK_SIZE).collect();
+
+                            match resampler.process_into_buffer(&[&input_chunk], &mut [&mut resample_out_buffer], None) {
                                 Ok((_, resampled_size)) => {
                                     info!("Resampled {} samples", resampled_size);
                                     sample_send_buffer.extend_from_slice(resample_out_buffer.drain(0..resampled_size).as_slice());
