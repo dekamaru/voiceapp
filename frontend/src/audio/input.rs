@@ -19,35 +19,6 @@ fn find_input_device() -> Result<Device, Box<dyn std::error::Error>> {
 
     info!("Selected input device: {}", device.name()?);
 
-    // Check supported configs
-    let configs = device.supported_input_configs()?;
-    let mut found_valid = false;
-
-    for config in configs {
-        if config.min_sample_rate() <= SampleRate(TARGET_SAMPLE_RATE)
-            && config.max_sample_rate() >= SampleRate(TARGET_SAMPLE_RATE)
-        {
-            found_valid = true;
-            debug!(
-                "Found config: {} channels, {}-{} Hz, {:?}",
-                config.channels(),
-                config.min_sample_rate().0,
-                config.max_sample_rate().0,
-                config.sample_format()
-            );
-        }
-    }
-
-    if !found_valid {
-        return Err(
-            format!(
-                "Device does not support {} Hz sample rate",
-                TARGET_SAMPLE_RATE
-            )
-            .into(),
-        );
-    }
-
     Ok(device)
 }
 
@@ -58,10 +29,7 @@ fn get_stream_config(device: &Device) -> Result<(StreamConfig, SampleFormat), Bo
 
     // Try to find F32 config at 48kHz first
     for config in &configs {
-        if config.sample_format() == SampleFormat::F32
-            && config.min_sample_rate() <= SampleRate(TARGET_SAMPLE_RATE)
-            && config.max_sample_rate() >= SampleRate(TARGET_SAMPLE_RATE)
-        {
+        if config.sample_format() == SampleFormat::F32 && config.max_sample_rate() >= SampleRate(TARGET_SAMPLE_RATE) {
             info!("Selected F32 format");
             let stream_config: StreamConfig = config.with_sample_rate(SampleRate(TARGET_SAMPLE_RATE)).into();
             return Ok((stream_config, SampleFormat::F32));
@@ -70,9 +38,7 @@ fn get_stream_config(device: &Device) -> Result<(StreamConfig, SampleFormat), Bo
 
     // Fall back to any other format at 48kHz
     for config in &configs {
-        if config.min_sample_rate() <= SampleRate(TARGET_SAMPLE_RATE)
-            && config.max_sample_rate() >= SampleRate(TARGET_SAMPLE_RATE)
-        {
+        if config.max_sample_rate() >= SampleRate(TARGET_SAMPLE_RATE) {
             let format = config.sample_format();
             info!("F32 not available, falling back to {:?} format", format);
             let stream_config: StreamConfig = config.with_sample_rate(SampleRate(TARGET_SAMPLE_RATE)).into();
@@ -80,7 +46,16 @@ fn get_stream_config(device: &Device) -> Result<(StreamConfig, SampleFormat), Bo
         }
     }
 
-    Err("Device does not support 48kHz sample rate".into())
+    // Fall back to maximum sample rate with best available format
+    if let Some(config) = configs.into_iter().max_by_key(|c| c.max_sample_rate().0) {
+        let format = config.sample_format();
+        let max_rate = config.max_sample_rate();
+        warn!("48kHz not available, using maximum sample rate {:?} with {:?} format", max_rate, format);
+        let stream_config: StreamConfig = config.with_sample_rate(max_rate).into();
+        return Ok((stream_config, format));
+    }
+
+    Err("No suitable input configuration found".into())
 }
 
 /// Convert stereo to mono by averaging channels (F32)
