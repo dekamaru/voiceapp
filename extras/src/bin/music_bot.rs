@@ -1,8 +1,7 @@
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{error, info};
-use voiceapp_sdk::voice_client::VoiceFrame;
-use voiceapp_sdk::VoiceClient;
+use voiceapp_sdk::{VoiceClient, VoiceInputPipeline, VoiceInputPipelineConfig, voiceapp_protocol};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -74,8 +73,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.join_channel().await?;
     info!("Connected!");
 
-    // Get the voice input sender
-    let voice_input_tx = client.voice_input_sender();
+    // Create voice input pipeline for 48kHz audio (music bot expects 48kHz)
+    let pipeline = VoiceInputPipeline::new(VoiceInputPipelineConfig { sample_rate: 48000 })?;
+    let voice_input_tx = pipeline.input_sender();
+    let pipeline_output_rx = pipeline.output_receiver();
+
+    // Spawn task to forward encoded voice data to UDP
+    let udp_send_tx = client.get_udp_send_tx();
+    tokio::spawn(async move {
+        loop {
+            match pipeline_output_rx.recv().await {
+                Ok(voice_data) => {
+                    let encoded = voiceapp_protocol::encode_voice_data(&voice_data);
+                    if let Err(e) = udp_send_tx.send(encoded).await {
+                        error!("Failed to send voice data to UDP: {}", e);
+                        break;
+                    }
+                }
+                Err(_) => {
+                    info!("Pipeline output channel closed");
+                    break;
+                }
+            }
+        }
+    });
 
     // Stream the WAV file in 20ms frames (960 samples at 48kHz)
     info!("Starting audio stream...");
@@ -99,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|&sample| sample as f32 / 32768.0)
             .collect();
 
-        if voice_input_tx.send(VoiceFrame::new(48000, float_frame)).await.is_err() {
+        if voice_input_tx.send(float_frame).await.is_err() {
             info!("Voice input channel closed, stopping stream");
             break;
         }

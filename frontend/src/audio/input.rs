@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 const TARGET_SAMPLE_RATE: u32 = 48000;
 
-/// Audio frame: mono F32 samples at 48kHz
+/// Audio frame: mono F32 samples
 pub type AudioFrame = Vec<f32>;
 
 /// Find and validate input device
@@ -79,10 +79,12 @@ fn stereo_to_mono(stereo: &[f32], channels: u16) -> Vec<f32> {
 }
 
 /// Create input stream that captures audio and sends frames through channel
-/// Returns the stream (to keep it alive) and a receiver for audio frames
-pub fn create_input_stream() -> Result<(Stream, SampleRate, mpsc::Receiver<AudioFrame>), Box<dyn std::error::Error>> {
+/// Returns (stream, actual_sample_rate, receiver)
+pub fn create_input_stream() -> Result<(Stream, u32, mpsc::Receiver<AudioFrame>), Box<dyn std::error::Error>> {
     let device = find_input_device()?;
     let (config, format) = get_stream_config(&device)?;
+
+    let sample_rate = config.sample_rate.0;
 
     info!(
         "Input stream config: {} channels, {} Hz, format: {:?}",
@@ -152,5 +154,5 @@ pub fn create_input_stream() -> Result<(Stream, SampleRate, mpsc::Receiver<Audio
     stream.play()?;
     debug!("Input stream started");
 
-    Ok((stream, config.sample_rate, rx))
+    Ok((stream, sample_rate, rx))
 }
