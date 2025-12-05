@@ -79,7 +79,7 @@ impl VoiceInputPipeline {
         };
 
         // Buffers
-        let mut resample_buffer = Vec::with_capacity(1024);
+        let mut resample_buffer = Vec::with_capacity(RESAMPLER_CHUNK_SIZE * 2);
         let mut encode_buffer = Vec::with_capacity(OPUS_FRAME_SAMPLES * 2);
 
         // Pre-allocate resampler output buffer for zero-allocation processing

@@ -97,7 +97,7 @@ impl RoomPage {
 
         let disconnect_button = container(
             Widgets::container_button(
-                container(text(if is_in_voice { "Disconnect" } else { "Join" }).size(14))
+                container(text(if is_in_voice { "Leave voice" } else { "Join voice" }).size(14))
                 .padding(Padding {top: 16.0, right: 24.0, bottom: 16.0, left: 24.0})
                 .align_x(Alignment::Center)
                 .align_y(Alignment::Center)
@@ -119,12 +119,17 @@ impl RoomPage {
                     }
                 }
             }),
-        ).padding(16).align_x(Alignment::Center).width(Length::Fill);
+        ).width(214).padding(Padding { left: 16.0, right: 16.0, ..Padding::default() });
+
+        let mute_slider = container(Self::mute_slider(self.muted))
+            .padding(Padding { bottom: 24.0, left: 16.0, right: 16.0, top: 16.0 })
+            .width(Length::Fill)
+            .align_x(Alignment::Center);
 
         let left_sidebar = container(
             sidebar_column
                 .push(Space::with_height(Length::Fill))
-                .push(disconnect_button)
+                .push(mute_slider)
         )
             .width(214) // TODO: adaptive or not?
             .height(Length::Fill);
@@ -189,15 +194,19 @@ impl RoomPage {
             .width(Length::Fill)
             .height(Length::Fill);
 
+        let settings_button = container(
+            Widgets::icon_button(Icons::gear_six_fill(None, 24)).on_press(RoomPageMessage::MuteToggle.into())
+        ).align_y(Alignment::Center).height(48);
+
         let bottom_bar = container(
             row!(
-                Icons::gear_six_fill(text_secondary(), 24),
+                disconnect_button,
                 Space::with_width(Length::Fill),
-                Self::mute_slider(self.muted)
+                settings_button,
             )
         )
             .width(Length::Fill)
-            .padding(16);
+            .padding(Padding { right: 16.0, bottom: 16.0, left: 0.0, top: 16.0 });
 
         let window_area = iced::widget::column!(
             horizontal_rule(1).style(rule_style),

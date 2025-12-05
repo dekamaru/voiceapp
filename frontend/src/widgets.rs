@@ -1,6 +1,7 @@
 use iced::{border, Background, Border, Color, Element, Length, Padding};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{button, container, row, text, text_input, Container};
+use iced::widget::button::Status;
 use iced::widget::container::Style;
 use crate::colors::{container_bg, text_primary, text_secondary, text_selection};
 use crate::icons::Icons;
@@ -20,6 +21,26 @@ impl Widgets {
         };
 
         button(container).padding(0).style(style)
+    }
+
+    pub fn icon_button(icon: Element<'_, Message>) -> iced::widget::Button<'_, Message> {
+        let style = |_theme: &iced::Theme, status| {
+            if status == Status::Hovered || status == Status::Pressed {
+                button::Style {
+                    background: Some(Background::Color(Color::TRANSPARENT)),
+                    text_color: text_primary(),
+                    ..button::Style::default()
+                }
+            } else {
+                button::Style {
+                    background: Some(Background::Color(Color::TRANSPARENT)),
+                    text_color: text_secondary(),
+                    ..button::Style::default()
+                }
+            }
+        };
+
+        button(icon).padding(0).style(style)
     }
 
     pub fn input_with_submit<'a>(
