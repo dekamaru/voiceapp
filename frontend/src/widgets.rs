@@ -3,10 +3,9 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{button, container, row, text, text_input, Container};
 use iced::widget::button::Status;
 use iced::widget::container::Style;
-use crate::colors::{container_bg, text_primary, text_secondary, text_selection};
+use crate::application::Message;
+use crate::colors::{text_primary, text_secondary, text_selection, DARK_CONTAINER_BACKGROUND};
 use crate::icons::Icons;
-use crate::Message;
-use crate::pages::login::LoginPageMessage;
 
 pub struct Widgets;
 
@@ -54,7 +53,7 @@ impl Widgets {
     ) -> iced::widget::Container<'a, Message> {
         let container_style = |_theme: &iced::Theme| {
             Style {
-                background: Some(Background::Color(container_bg())),
+                background: Some(Background::Color(DARK_CONTAINER_BACKGROUND)),
                 border: border::rounded(24),
                 ..Style::default()
             }

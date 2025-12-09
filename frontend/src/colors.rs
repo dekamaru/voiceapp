@@ -1,13 +1,7 @@
 use iced::Color;
 
-// Background colors
-pub fn background_dark() -> Color {
-    Color::from_rgb8(22, 23, 26)
-}
-
-pub fn container_bg() -> Color {
-    Color::from_rgb8(38, 39, 41)
-}
+pub const DARK_BACKGROUND: Color = Color::from_rgb8(22, 23, 26);
+pub const DARK_CONTAINER_BACKGROUND: Color = Color::from_rgb8(38, 39, 41);
 
 pub fn divider_bg() -> Color {
     Color::from_rgb8(48, 48, 52)

@@ -4,9 +4,8 @@ use iced::font::{Family, Weight};
 use iced::widget::{button, container, row, space, stack, text, text_input, Space};
 use iced::widget::container::Style;
 use tracing::debug;
-use crate::{Message, Page, VoiceCommand, VoiceCommandResult};
-use crate::colors::{color_error, container_bg, text_primary, text_secondary, text_selection};
-use crate::icons::Icons;
+use crate::application::{Message, Page, VoiceCommand, VoiceCommandResult};
+use crate::colors::{color_error, text_primary, text_secondary, text_selection, DARK_CONTAINER_BACKGROUND};
 use crate::widgets::Widgets;
 
 #[derive(Default)]
@@ -92,7 +91,7 @@ impl LoginPage {
     fn input(&self, placeholder: &str, value: &mut String, message: fn(String) -> LoginPageMessage, submit_message: LoginPageMessage) -> iced::widget::Container<Message> {
         let container_style = |_theme: &iced::Theme| {
             Style {
-                background: Some(Background::Color(container_bg())),
+                background: Some(Background::Color(DARK_CONTAINER_BACKGROUND)),
                 border: border::rounded(24),
                 ..Style::default()
             }
@@ -141,10 +140,6 @@ impl Page for LoginPage {
                     LoginPageMessage::LoginSubmitted => {
                         if self.form_filled {
                             // TODO: inputs should be blocked (buttons as well)
-                            // TODO: right now protocol defines participant info reused by management server + protocol + client.
-                            //  It should not be the case. Protocol should include usernames in login response.
-                            // TODO: connect() from voice client should make broadcast to event tx
-                            // TODO: Client listens only to event tx!
                             return Task::done(
                                 Message::ExecuteVoiceCommand(VoiceCommand::Connect {
                                     management_addr: format!("{}:9001", self.voice_url),

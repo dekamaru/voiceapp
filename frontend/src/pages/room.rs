@@ -1,5 +1,4 @@
 use std::collections::{HashMap, BTreeMap};
-use std::os::macos::raw::stat;
 use iced::{border, Alignment, Background, Border, Color, Element, Length, Padding, Task, Theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::border::Radius;
@@ -7,15 +6,14 @@ use iced::widget::{button, container, row, rule, text, Space, column, Container,
 use iced::widget::button::Status;
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
-use iced::widget::scrollable::{AutoScroll, Direction, Rail, Scrollbar, Scroller};
+use iced::widget::scrollable::{Direction, Rail, Scrollbar, Scroller};
 use voiceapp_sdk::{VoiceClientEvent, ParticipantInfo};
-use crate::{Message, Page};
-use crate::colors::{color_alert, color_success, container_bg, debug_red, divider_bg, slider_bg, slider_thumb, text_chat_header, text_primary, text_secondary};
+use crate::colors::{color_alert, color_success, debug_red, divider_bg, slider_bg, slider_thumb, text_chat_header, text_primary, text_secondary, DARK_CONTAINER_BACKGROUND};
 use crate::icons::Icons;
-use crate::{VoiceCommand, VoiceCommandResult};
 use crate::widgets::Widgets;
 use chrono::{DateTime, Utc, Local};
 use tracing::{debug, warn};
+use crate::application::{Message, Page, VoiceCommand, VoiceCommandResult};
 
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
@@ -113,7 +111,7 @@ impl RoomPage {
                     }
                 } else {
                     button::Style {
-                        background: Some(Background::Color(container_bg())),
+                        background: Some(Background::Color(DARK_CONTAINER_BACKGROUND)),
                         text_color: text_primary(),
                         border: border::rounded(24),
                         ..button::Style::default()
