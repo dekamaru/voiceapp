@@ -1,5 +1,5 @@
 use iced::font::Font;
-use iced::{Color, Element};
+use iced::{Color, Element, Pixels};
 use iced::widget::text;
 
 pub struct Icons;
@@ -27,7 +27,7 @@ impl Icons {
 
     fn icon_fill<'a, Message>(codepoint: char, color: Option<Color>, size: u16) -> Element<'a, Message> {
         const ICON_FONT: Font = Font::with_name("Phosphor-Fill");
-        let elem = text(codepoint).font(ICON_FONT).size(size);
+        let elem = text(codepoint).font(ICON_FONT).size(Pixels::from(size as u32));
 
         if color.is_some() {
             elem.color(color.unwrap())
@@ -38,6 +38,6 @@ impl Icons {
 
     fn icon_solid<'a, Message>(codepoint: char, color: Color, size: u16) -> Element<'a, Message> {
         const ICON_FONT: Font = Font::with_name("Phosphor");
-        text(codepoint).font(ICON_FONT).size(size).color(color).into()
+        text(codepoint).font(ICON_FONT).size(Pixels::from(size as u32)).color(color).into()
     }
 }

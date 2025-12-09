@@ -1,12 +1,13 @@
 use std::collections::{HashMap, BTreeMap};
+use std::os::macos::raw::stat;
 use iced::{border, Alignment, Background, Border, Color, Element, Length, Padding, Task, Theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::border::Radius;
-use iced::widget::{button, container, horizontal_rule, row, rule, text, vertical_rule, Space, column, Container, scrollable, Scrollable};
+use iced::widget::{button, container, row, rule, text, Space, column, Container, scrollable, Scrollable, space, Id};
 use iced::widget::button::Status;
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
-use iced::widget::scrollable::{Direction, Id, Rail, Scrollbar, Scroller};
+use iced::widget::scrollable::{AutoScroll, Direction, Rail, Scrollbar, Scroller};
 use voiceapp_sdk::{VoiceClientEvent, ParticipantInfo};
 use crate::{Message, Page};
 use crate::colors::{color_alert, color_success, container_bg, debug_red, divider_bg, slider_bg, slider_thumb, text_chat_header, text_primary, text_secondary};
@@ -75,9 +76,9 @@ impl RoomPage {
         let rule_style = |_theme: &Theme| {
             rule::Style {
                 color: divider_bg(),
-                width: 1,
                 radius: Radius::default(),
                 fill_mode: FillMode::Full,
+                snap: false,
             }
         };
 
@@ -128,7 +129,7 @@ impl RoomPage {
 
         let left_sidebar = container(
             sidebar_column
-                .push(Space::with_height(Length::Fill))
+                .push(space::vertical())
                 .push(mute_slider)
         )
             .width(214) // TODO: adaptive or not?
@@ -149,7 +150,7 @@ impl RoomPage {
                 background: Some(Background::Color(Color::TRANSPARENT)),
                 border: Border::default(),
                 scroller: Scroller {
-                    color: text_chat_header(),
+                    background: Background::Color(text_chat_header()),
                     border: border::rounded(12)
                 }
             };
@@ -161,7 +162,8 @@ impl RoomPage {
                 },
                 vertical_rail: rail,
                 horizontal_rail: rail,
-                gap: None
+                gap: None,
+                ..scrollable::default(theme, status)
             }
         });
 
@@ -187,7 +189,7 @@ impl RoomPage {
         let main_content_area = container(
             row!(
                 left_sidebar,
-                vertical_rule(1).style(rule_style),
+                rule::vertical(1).style(rule_style),
                 chat_area,
             )
         )
@@ -201,7 +203,7 @@ impl RoomPage {
         let bottom_bar = container(
             row!(
                 disconnect_button,
-                Space::with_width(Length::Fill),
+                space::horizontal(),
                 settings_button,
             )
         )
@@ -209,9 +211,9 @@ impl RoomPage {
             .padding(Padding { right: 16.0, bottom: 16.0, left: 0.0, top: 16.0 });
 
         let window_area = iced::widget::column!(
-            horizontal_rule(1).style(rule_style),
+            rule::horizontal(1).style(rule_style),
             main_content_area,
-            horizontal_rule(1).style(rule_style),
+            rule::horizontal(1).style(rule_style),
             bottom_bar
         );
 
@@ -223,7 +225,7 @@ impl RoomPage {
             column!(
                 row!(
                     text(username).color(text_chat_header()).size(12),
-                    Space::with_width(Length::Fill),
+                    space::horizontal(),
                     text(time).color(text_chat_header()).size(12)
                 ),
                 text(message).color(text_primary()).size(14)
@@ -439,7 +441,8 @@ impl Page for RoomPage {
                             let chat_msg = ChatMessage::new(participant.username.clone(), message, timestamp);
                             self.chat_history.insert(timestamp, chat_msg);
 
-                            return scrollable::snap_to(Id::new("chat_area_scroll"), scrollable::RelativeOffset::END)
+
+                            return iced::widget::operation::snap_to(Id::new("chat_area_scroll"), scrollable::RelativeOffset::END)
                         }
                     }
                 }

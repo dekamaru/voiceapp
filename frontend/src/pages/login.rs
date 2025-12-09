@@ -1,7 +1,7 @@
 use iced::{border, Background, Border, Color, Element, Font, Length, Padding, Task};
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Family, Weight};
-use iced::widget::{button, container, row, stack, text, text_input, Space};
+use iced::widget::{button, container, row, space, stack, text, text_input, Space};
 use iced::widget::container::Style;
 use tracing::debug;
 use crate::{Message, Page, VoiceCommand, VoiceCommandResult};
@@ -69,10 +69,10 @@ impl LoginPage {
         );
 
         let login_form = iced::widget::column!(
-          Space::with_height(Length::Fill),
+          space::vertical(),
           text!("Voiceapp").size(32).font(bold),
           form,
-          Space::with_height(Length::Fill),
+          space::vertical(),
       )
             .spacing(32)
             .align_x(Horizontal::Center)

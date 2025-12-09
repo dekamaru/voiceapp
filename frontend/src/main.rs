@@ -33,7 +33,7 @@ fn main() -> iced::Result {
         })
     };
 
-    iced::application("Voiceapp", Application::update, Application::view)
+    iced::application(Application::new, Application::update, Application::view)
         .theme(theme)
         .font(include_bytes!("../fonts/phosphor-fill.ttf").as_slice())
         .font(include_bytes!("../fonts/phosphor-regular.ttf").as_slice())
@@ -41,7 +41,7 @@ fn main() -> iced::Result {
         .font(include_bytes!("../fonts/rubik-semibold.ttf").as_slice())
         .default_font(Font::with_name("Rubik"))
         .antialiasing(true)
-        .run_with(Application::new)
+        .run()
 }
 
 #[derive(Debug, Clone)]
