@@ -28,6 +28,8 @@ fn main() -> iced::Result {
 
     iced::application(Application::new, Application::update, Application::view)
         .theme(theme)
+        .subscription(Application::subscription)
+        .title("Voiceapp")
         .font(include_bytes!("../fonts/phosphor-fill.ttf").as_slice())
         .font(include_bytes!("../fonts/phosphor-regular.ttf").as_slice())
         .font(include_bytes!("../fonts/rubik-regular.ttf").as_slice())

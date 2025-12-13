@@ -14,6 +14,7 @@ use crate::widgets::Widgets;
 use chrono::{DateTime, Utc, Local};
 use tracing::{debug, warn};
 use crate::application::{Message, Page, VoiceCommand, VoiceCommandResult};
+use crate::pages::settings::SettingsPage;
 
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
@@ -49,6 +50,8 @@ pub struct RoomPage {
     chat_message: String,
     participants: HashMap<u64, ParticipantInfo>,
     chat_history: BTreeMap<u64, ChatMessage>,
+    show_settings: bool,
+    settings: SettingsPage,
 }
 
 #[derive(Debug, Clone)]
@@ -56,7 +59,8 @@ pub enum RoomPageMessage {
     MuteToggle,
     JoinLeaveToggle,
     ChatMessageChanged(String),
-    ChatMessageSubmitted
+    ChatMessageSubmitted,
+    SettingsToggle,
 }
 
 impl Into<Message> for RoomPageMessage {
@@ -67,7 +71,10 @@ impl Into<Message> for RoomPageMessage {
 
 impl RoomPage {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            settings: SettingsPage::new(),
+            ..Self::default()
+        }
     }
 
     fn main_screen(&self) -> iced::widget::Container<'static, Message> {
@@ -128,7 +135,7 @@ impl RoomPage {
         let left_sidebar = container(
             sidebar_column
                 .push(space::vertical())
-                .push(mute_slider)
+                .push(if self.is_in_voice() { mute_slider } else { container("") })
         )
             .width(214) // TODO: adaptive or not?
             .height(Length::Fill);
@@ -195,7 +202,7 @@ impl RoomPage {
             .height(Length::Fill);
 
         let settings_button = container(
-            Widgets::icon_button(Icons::gear_six_fill(None, 24)).on_press(RoomPageMessage::MuteToggle.into())
+            Widgets::icon_button(Icons::gear_six_fill(None, 24)).on_press(RoomPageMessage::SettingsToggle.into())
         ).align_y(Alignment::Center).height(48);
 
         let bottom_bar = container(
@@ -340,6 +347,10 @@ impl RoomPage {
             }
         }
     }
+
+    fn is_in_voice(&self) -> bool {
+        self.participants.get(&self.user_id).map(|p| p.in_voice).unwrap_or(false)
+    }
 }
 
 impl Page for RoomPage {
@@ -351,8 +362,7 @@ impl Page for RoomPage {
                         self.muted = !self.muted;
                     }
                     RoomPageMessage::JoinLeaveToggle => {
-                        let is_in_voice = self.participants.get(&self.user_id).map(|p| p.in_voice).unwrap_or(false);
-                        if is_in_voice {
+                        if self.is_in_voice() {
                             return Task::done(Message::ExecuteVoiceCommand(VoiceCommand::LeaveVoiceChannel))
                         }
 
@@ -372,8 +382,14 @@ impl Page for RoomPage {
                             ));
                         }
                     }
+                    RoomPageMessage::SettingsToggle => {
+                        self.show_settings = !self.show_settings;
+                    }
                 }
             },
+            Message::SettingsPage(_) => {
+                return self.settings.update(message);
+            }
             Message::VoiceCommandResult(result) => {
                 match result {
                     VoiceCommandResult::JoinVoiceChannel(status) => {
@@ -445,6 +461,11 @@ impl Page for RoomPage {
                     }
                 }
             }
+            Message::KeyPressed(key) => {
+                if self.show_settings && matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)) {
+                    self.show_settings = false;
+                }
+            }
             _ => { debug!("Ignoring event in RoomPage {:?}", message); }
         }
 
@@ -452,6 +473,10 @@ impl Page for RoomPage {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        self.main_screen().into()
+        if self.show_settings {
+            self.settings.view()
+        } else {
+            self.main_screen().into()
+        }
     }
 }

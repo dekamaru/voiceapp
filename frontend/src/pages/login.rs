@@ -46,7 +46,7 @@ impl LoginPage {
 
     fn login_screen(&self) -> iced::widget::Stack<Message> {
         let bold = Font {
-            family: Family::Name("Rubik SemiBold"),
+            family: Family::Name("Rubik"),
             weight: Weight::Semibold,
             ..Default::default()
         };

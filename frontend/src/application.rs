@@ -6,16 +6,21 @@ use voiceapp_sdk::{VoiceClient, VoiceClientEvent};
 use crate::audio::AudioManager;
 use crate::pages::login::{LoginPage, LoginPageMessage};
 use crate::pages::room::{RoomPage, RoomPageMessage};
+use crate::pages::settings::SettingsPageMessage;
 
 #[derive(Debug, Clone)]
 pub enum Message {
     LoginPage(LoginPageMessage),
     RoomPage(RoomPageMessage),
+    SettingsPage(SettingsPageMessage),
 
     // Voice client message bus
     ExecuteVoiceCommand(VoiceCommand),
     VoiceCommandResult(VoiceCommandResult),
-    ServerEventReceived(VoiceClientEvent)
+    ServerEventReceived(VoiceClientEvent),
+
+    // Keyboard events
+    KeyPressed(iced::keyboard::Key),
 }
 
 #[derive(Debug, Clone)]
@@ -159,5 +164,15 @@ impl Application {
                 )
             }
         }
+    }
+
+    pub fn subscription(&self) -> iced::Subscription<Message> {
+        iced::event::listen().filter_map(|event| {
+            if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, .. }) = event {
+                Some(Message::KeyPressed(key))
+            } else {
+                None
+            }
+        })
     }
 }
