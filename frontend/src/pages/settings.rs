@@ -1,10 +1,11 @@
 use crate::application::{Message, Page};
-use crate::audio::list_input_devices;
+use crate::audio::{create_input_stream, list_input_devices};
 use crate::colors::{debug_red, text_primary, DARK_BACKGROUND, DARK_CONTAINER_BACKGROUND};
 use crate::icons::Icons;
 use crate::pages::room::RoomPageMessage;
 use crate::widgets;
 use crate::widgets::Widgets;
+use cpal::Stream;
 use iced::border::{radius, rounded, Radius};
 use iced::font::{Family, Weight};
 use iced::widget::button::Status;
@@ -17,6 +18,7 @@ use iced::{
     Theme,
 };
 use std::collections::HashMap;
+use tokio::sync::mpsc;
 
 pub struct SettingsPage {
     // Add settings state fields here as needed
@@ -24,6 +26,10 @@ pub struct SettingsPage {
     selected_input_device: usize,
     input_sensitivity: u8,
     input_device_names: Vec<String>,
+
+    // Audio input stream and channel
+    input_stream: Option<Stream>,
+    samples_tx: mpsc::Sender<Vec<f32>>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +39,9 @@ pub enum SettingsPageMessage {
 
     RadioHoverEnter(String, usize),
     RadioHoverLeave(String, usize),
+
+    // Input stream control
+    InputStreamCreated(Result<(), String>),
 }
 
 impl Into<Message> for SettingsPageMessage {
@@ -43,6 +52,9 @@ impl Into<Message> for SettingsPageMessage {
 
 impl SettingsPage {
     pub fn new() -> Self {
+        // Create channel for audio samples (but don't start stream yet)
+        let (samples_tx, _samples_rx) = mpsc::channel(100);
+
         // Get available input devices
         let (device_names, default_index) = list_input_devices().unwrap_or_else(|e| {
             tracing::warn!("Failed to list input devices: {}", e);
@@ -54,6 +66,57 @@ impl SettingsPage {
             selected_input_device: default_index,
             input_sensitivity: 50,
             input_device_names: device_names,
+            input_stream: None,
+            samples_tx,
+        }
+    }
+
+    /// Starts the input stream and returns task that produces VoiceInputSamplesReceived messages
+    /// Should be called when settings page is opened
+    pub fn start_input_stream(&mut self) -> Task<Message> {
+        // Create new channel for samples
+        let (samples_tx, samples_rx) = mpsc::channel(100);
+        self.samples_tx = samples_tx.clone();
+
+        // Create the audio input stream
+        match create_input_stream() {
+            Ok((stream, _sample_rate, mut stream_rx)) => {
+                tracing::info!("Input stream created successfully");
+                self.input_stream = Some(stream);
+
+                // Task to rebroadcast from stream_rx to persistent samples_tx
+                let rebroadcast_task = Task::perform(
+                    async move {
+                        while let Some(samples) = stream_rx.recv().await {
+                            if samples_tx.send(samples).await.is_err() {
+                                tracing::warn!("Failed to send samples to persistent channel");
+                                break;
+                            }
+                        }
+                        Ok::<(), String>(())
+                    },
+                    |result| {
+                        if let Err(ref e) = result {
+                            tracing::error!("Stream rebroadcast error: {}", e);
+                        }
+                        SettingsPageMessage::InputStreamCreated(result).into()
+                    },
+                );
+
+                // Task to listen to samples and produce messages
+                use tokio_stream::wrappers::ReceiverStream;
+                let samples_stream = ReceiverStream::new(samples_rx);
+                let samples_task = Task::run(samples_stream, |samples| {
+                    Message::VoiceInputSamplesReceived(samples)
+                });
+
+                // Combine both tasks
+                Task::batch(vec![rebroadcast_task, samples_task])
+            }
+            Err(e) => {
+                tracing::error!("Failed to create input stream: {}", e);
+                Task::none()
+            }
         }
     }
 
@@ -216,6 +279,12 @@ impl SettingsPage {
         column
     }
 
+    /// Stops the input stream
+    pub fn stop_input_stream(&mut self) {
+        self.input_stream = None;
+        tracing::info!("Input stream stopped");
+    }
+
     fn settings_page(&self) -> iced::widget::Container<'_, Message> {
         let bold = Font {
             family: Family::Name("Rubik"),
@@ -304,6 +373,10 @@ impl Page for SettingsPage {
                     // Handle settings messages here
                     SettingsPageMessage::SelectInputDevice(index) => {
                         self.selected_input_device = index;
+
+                        // Recreate input stream with new device
+                        self.stop_input_stream();
+                        return self.start_input_stream();
                     }
                     SettingsPageMessage::RadioHoverEnter(group, index) => {
                         self.radio_hover_indexes.insert(group, index);
@@ -318,6 +391,14 @@ impl Page for SettingsPage {
                     SettingsPageMessage::InputSensitivityChanged(sensitivity) => {
                         self.input_sensitivity = sensitivity;
                     }
+                    SettingsPageMessage::InputStreamCreated(result) => match result {
+                        Ok(()) => {
+                            tracing::info!("Input stream task completed");
+                        }
+                        Err(e) => {
+                            tracing::error!("Input stream task error: {}", e);
+                        }
+                    },
                 }
             }
             _ => {}

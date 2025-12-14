@@ -18,6 +18,7 @@ pub enum Message {
     ExecuteVoiceCommand(VoiceCommand),
     VoiceCommandResult(VoiceCommandResult),
     ServerEventReceived(VoiceClientEvent),
+    VoiceInputSamplesReceived(Vec<f32>),
 
     // Keyboard events
     KeyPressed(iced::keyboard::Key),

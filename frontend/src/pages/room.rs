@@ -75,8 +75,11 @@ impl Into<Message> for RoomPageMessage {
 
 impl RoomPage {
     pub fn new() -> Self {
+        // Create settings page - stream will start when settings is opened
+        let settings = SettingsPage::new();
+
         Self {
-            settings: SettingsPage::new(),
+            settings,
             user_id: 0,
             muted: false,
             chat_message: String::new(),
@@ -480,7 +483,15 @@ impl Page for RoomPage {
                     }
                 }
                 RoomPageMessage::SettingsToggle => {
-                    self.show_settings = !self.show_settings;
+                    if self.show_settings {
+                        // Closing settings - stop the input stream
+                        self.settings.stop_input_stream();
+                        self.show_settings = false;
+                    } else {
+                        // Opening settings - start the input stream
+                        self.show_settings = true;
+                        return self.settings.start_input_stream();
+                    }
                 }
             },
             Message::SettingsPage(_) => {

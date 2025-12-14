@@ -3,4 +3,4 @@ mod input;
 mod output;
 
 pub use audio_manager::AudioManager;
-pub use input::list_input_devices;
+pub use input::{create_input_stream, list_input_devices};
