@@ -12,7 +12,7 @@ use iced::widget::button::Status;
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
 use iced::widget::slider::{Handle, HandleShape, Rail};
-use iced::widget::{button, column, container, mouse_area, row, rule, slider, text};
+use iced::widget::{button, column, container, mouse_area, progress_bar, row, rule, slider, stack, text};
 use iced::{
     border, Alignment, Background, Border, Color, Element, Font, Length, Padding, Renderer, Task,
     Theme,
@@ -30,6 +30,9 @@ pub struct SettingsPage {
     // Audio input stream and channel
     input_stream: Option<Stream>,
     samples_tx: mpsc::Sender<Vec<f32>>,
+
+    // Voice level meter (0.0 to 1.0, representing -100dB to 0dB)
+    voice_level: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -64,10 +67,11 @@ impl SettingsPage {
         Self {
             radio_hover_indexes: HashMap::new(),
             selected_input_device: default_index,
-            input_sensitivity: 50,
+            input_sensitivity: 30,
             input_device_names: device_names,
             input_stream: None,
             samples_tx,
+            voice_level: 0.0,
         }
     }
 
@@ -321,6 +325,14 @@ impl SettingsPage {
         )
         .spacing(12);
 
+        let progress_bar = container(progress_bar(0.0..=1.0, self.voice_level).girth(4).style(|_theme: &Theme| {
+            progress_bar::Style {
+                background: Background::Color(Color::TRANSPARENT),
+                bar: Background::Color(Color::from_rgba8(0, 0, 0, 0.3)),
+                border: rounded(2),
+            }
+        })).padding(Padding { top: 6.0, ..Padding::default() });
+
         let sensitivity_slider = slider(0..=100, self.input_sensitivity, |v| {
             SettingsPageMessage::InputSensitivityChanged(v).into()
         })
@@ -342,8 +354,8 @@ impl SettingsPage {
         });
 
         let input_device_sensitivity = column!(
-            text("Input device sensitivity").font(bold).size(12),
-            sensitivity_slider
+            text("Input sensitivity").font(bold).size(12),
+            stack!(sensitivity_slider, progress_bar)
         )
         .spacing(12);
 
@@ -399,6 +411,30 @@ impl Page for SettingsPage {
                             tracing::error!("Input stream task error: {}", e);
                         }
                     },
+                }
+            }
+            Message::VoiceInputSamplesReceived(samples) => {
+                // Calculate RMS (root mean square) of the samples
+                if !samples.is_empty() {
+                    let sum_squares: f32 = samples.iter().map(|&s| s * s).sum();
+                    let rms = (sum_squares / samples.len() as f32).sqrt();
+
+                    // Convert to dBFS: 20 * log10(rms)
+                    let db_fs = if rms > 0.0 {
+                        20.0 * rms.log10()
+                    } else {
+                        -100.0
+                    };
+
+                    const NOISE_GATE_DB: f32 = -70.0;
+                    const MAX_DB: f32 = 0.0;
+
+                    self.voice_level = if db_fs < NOISE_GATE_DB {
+                        0.0
+                    } else {
+                        // Map from NOISE_GATE_DB to 0 dBFS as 0.0 to 1.0
+                        ((db_fs - NOISE_GATE_DB) / (MAX_DB - NOISE_GATE_DB)).clamp(0.0, 1.0)
+                    };
                 }
             }
             _ => {}

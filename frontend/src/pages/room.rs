@@ -494,7 +494,7 @@ impl Page for RoomPage {
                     }
                 }
             },
-            Message::SettingsPage(_) => {
+            Message::SettingsPage(_) | Message::VoiceInputSamplesReceived(_) => {
                 return self.settings.update(message);
             }
             Message::VoiceCommandResult(result) => match result {
@@ -587,6 +587,7 @@ impl Page for RoomPage {
                         iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
                     )
                 {
+                    self.settings.stop_input_stream();
                     self.show_settings = false;
                 }
             }
