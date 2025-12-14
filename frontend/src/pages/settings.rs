@@ -1,4 +1,5 @@
 use crate::application::{Message, Page};
+use crate::audio::list_input_devices;
 use crate::colors::{debug_red, text_primary, DARK_BACKGROUND, DARK_CONTAINER_BACKGROUND};
 use crate::icons::Icons;
 use crate::pages::room::RoomPageMessage;
@@ -9,6 +10,7 @@ use iced::font::{Family, Weight};
 use iced::widget::button::Status;
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
+use iced::widget::slider::{Handle, HandleShape, Rail};
 use iced::widget::{button, column, container, mouse_area, row, rule, slider, text};
 use iced::{
     border, Alignment, Background, Border, Color, Element, Font, Length, Padding, Renderer, Task,
@@ -16,12 +18,12 @@ use iced::{
 };
 use std::collections::HashMap;
 
-#[derive(Default)]
 pub struct SettingsPage {
     // Add settings state fields here as needed
     radio_hover_indexes: HashMap<String, usize>,
     selected_input_device: usize,
-    input_sensitivity: u8
+    input_sensitivity: u8,
+    input_device_names: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,9 +43,17 @@ impl Into<Message> for SettingsPageMessage {
 
 impl SettingsPage {
     pub fn new() -> Self {
+        // Get available input devices
+        let (device_names, default_index) = list_input_devices().unwrap_or_else(|e| {
+            tracing::warn!("Failed to list input devices: {}", e);
+            (vec!["No devices available".to_string()], 0)
+        });
+
         Self {
+            radio_hover_indexes: HashMap::new(),
+            selected_input_device: default_index,
             input_sensitivity: 50,
-            ..Self::default()
+            input_device_names: device_names,
         }
     }
 
@@ -229,25 +239,44 @@ impl SettingsPage {
         .spacing(12)
         .height(25);
 
-        const DEVICES: &[&str] = &[
-            "Realtek Digital Output (Realtek(R) Audio)",
-            "Динамики (Steam Streaming Speakers)",
-            "Наушники (AirPods Pro – Find My)",
-        ];
-
         let input_device_select = self.input_radio(
-            DEVICES,
+            &self.input_device_names,
             self.selected_input_device,
             "input_device",
             SettingsPageMessage::SelectInputDevice,
         );
 
-        let input_device = column!(text("Input device").font(bold).size(12), input_device_select).spacing(12);
+        let input_device = column!(
+            text("Input device").font(bold).size(12),
+            input_device_select
+        )
+        .spacing(12);
+
+        let sensitivity_slider = slider(0..=100, self.input_sensitivity, |v| {
+            SettingsPageMessage::InputSensitivityChanged(v).into()
+        })
+        .style(|_theme: &Theme, _status: slider::Status| slider::Style {
+            rail: Rail {
+                backgrounds: (
+                    Background::Color(Color::from_rgb8(206, 157, 92)),
+                    Background::Color(Color::from_rgb8(67, 162, 91)),
+                ),
+                width: 4.0,
+                border: rounded(2),
+            },
+            handle: Handle {
+                shape: HandleShape::Circle { radius: 8.0 },
+                background: Background::Color(text_primary()),
+                border_width: 0.0,
+                border_color: Color::TRANSPARENT,
+            },
+        });
 
         let input_device_sensitivity = column!(
             text("Input device sensitivity").font(bold).size(12),
-            slider(0..=100, self.input_sensitivity, |v| SettingsPageMessage::InputSensitivityChanged(v).into())
-        );
+            sensitivity_slider
+        )
+        .spacing(12);
 
         let settings_container = column!(input_device, input_device_sensitivity).spacing(24);
 
@@ -285,7 +314,7 @@ impl Page for SettingsPage {
                                 self.radio_hover_indexes.remove(&group);
                             }
                         }
-                    },
+                    }
                     SettingsPageMessage::InputSensitivityChanged(sensitivity) => {
                         self.input_sensitivity = sensitivity;
                     }

@@ -48,7 +48,6 @@ impl ChatMessage {
     }
 }
 
-#[derive(Default)]
 pub struct RoomPage {
     user_id: u64,
     muted: bool,
@@ -78,7 +77,12 @@ impl RoomPage {
     pub fn new() -> Self {
         Self {
             settings: SettingsPage::new(),
-            ..Self::default()
+            user_id: 0,
+            muted: false,
+            chat_message: String::new(),
+            participants: HashMap::new(),
+            chat_history: BTreeMap::new(),
+            show_settings: false,
         }
     }
 

@@ -162,3 +162,47 @@ pub fn create_input_stream(
 
     Ok((stream, sample_rate, rx))
 }
+
+/// List all available input devices
+/// Returns (device_names, default_device_index)
+pub fn list_input_devices() -> Result<(Vec<String>, usize), Box<dyn std::error::Error>> {
+    let host = cpal::default_host();
+
+    // Get all input devices
+    let devices: Vec<Device> = host.input_devices()?.collect();
+
+    if devices.is_empty() {
+        return Err("No input devices found".into());
+    }
+
+    // Get device names
+    let device_names: Vec<String> = devices
+        .iter()
+        .filter_map(|device| device.name().ok())
+        .collect();
+
+    // Find default device index
+    let default_device = host.default_input_device();
+    let default_index = if let Some(default_dev) = default_device {
+        if let Ok(default_name) = default_dev.name() {
+            device_names
+                .iter()
+                .position(|name| name == &default_name)
+                .unwrap_or(0)
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    info!(
+        "Found {} input devices, default: {}",
+        device_names.len(),
+        device_names
+            .get(default_index)
+            .unwrap_or(&"unknown".to_string())
+    );
+
+    Ok((device_names, default_index))
+}
