@@ -1,6 +1,6 @@
 use iced::font::Font;
-use iced::{Color, Element, Pixels};
 use iced::widget::text;
+use iced::{Color, Element, Pixels};
 
 pub struct Icons;
 
@@ -29,25 +29,39 @@ impl Icons {
         Self::icon_solid('\u{E058}', color, size)
     }
 
-    fn icon_fill<'a, Message>(codepoint: char, color: Option<Color>, size: u16) -> Element<'a, Message> {
+    fn icon_fill<'a, Message>(
+        codepoint: char,
+        color: Option<Color>,
+        size: u16,
+    ) -> Element<'a, Message> {
         const ICON_FONT: Font = Font::with_name("Phosphor-Fill");
-        let elem = text(codepoint).font(ICON_FONT).size(Pixels::from(size as u32));
+        let elem = text(codepoint)
+            .font(ICON_FONT)
+            .size(Pixels::from(size as u32));
 
         if color.is_some() {
             elem.color(color.unwrap())
         } else {
             elem
-        }.into()
+        }
+        .into()
     }
 
-    fn icon_solid<'a, Message>(codepoint: char, color: Option<Color>, size: u16) -> Element<'a, Message> {
+    fn icon_solid<'a, Message>(
+        codepoint: char,
+        color: Option<Color>,
+        size: u16,
+    ) -> Element<'a, Message> {
         const ICON_FONT: Font = Font::with_name("Phosphor");
-        let elem = text(codepoint).font(ICON_FONT).size(Pixels::from(size as u32));
+        let elem = text(codepoint)
+            .font(ICON_FONT)
+            .size(Pixels::from(size as u32));
 
         if color.is_some() {
             elem.color(color.unwrap())
         } else {
             elem
-        }.into()
+        }
+        .into()
     }
 }

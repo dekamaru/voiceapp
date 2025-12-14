@@ -1,20 +1,25 @@
-use std::collections::{HashMap, BTreeMap};
-use iced::{border, Alignment, Background, Border, Color, Element, Length, Padding, Task, Theme};
+use crate::application::{Message, Page, VoiceCommand, VoiceCommandResult};
+use crate::colors::{
+    color_alert, color_success, debug_red, divider_bg, slider_bg, slider_thumb, text_chat_header,
+    text_primary, text_secondary, DARK_CONTAINER_BACKGROUND,
+};
+use crate::icons::Icons;
+use crate::pages::settings::SettingsPage;
+use crate::widgets::Widgets;
+use chrono::{DateTime, Local, Utc};
 use iced::alignment::{Horizontal, Vertical};
 use iced::border::Radius;
-use iced::widget::{button, container, row, rule, text, Space, column, Container, scrollable, Scrollable, space, Id};
 use iced::widget::button::Status;
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
 use iced::widget::scrollable::{Direction, Rail, Scrollbar, Scroller};
-use voiceapp_sdk::{VoiceClientEvent, ParticipantInfo};
-use crate::colors::{color_alert, color_success, debug_red, divider_bg, slider_bg, slider_thumb, text_chat_header, text_primary, text_secondary, DARK_CONTAINER_BACKGROUND};
-use crate::icons::Icons;
-use crate::widgets::Widgets;
-use chrono::{DateTime, Utc, Local};
+use iced::widget::{
+    button, column, container, row, rule, scrollable, space, text, Container, Id, Scrollable, Space,
+};
+use iced::{border, Alignment, Background, Border, Color, Element, Length, Padding, Task, Theme};
+use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, warn};
-use crate::application::{Message, Page, VoiceCommand, VoiceCommandResult};
-use crate::pages::settings::SettingsPage;
+use voiceapp_sdk::{ParticipantInfo, VoiceClientEvent};
 
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
@@ -78,37 +83,62 @@ impl RoomPage {
     }
 
     fn main_screen(&self) -> iced::widget::Container<'static, Message> {
-        let rule_style = |_theme: &Theme| {
-            rule::Style {
-                color: divider_bg(),
-                radius: Radius::default(),
-                fill_mode: FillMode::Full,
-                snap: false,
-            }
+        let rule_style = |_theme: &Theme| rule::Style {
+            color: divider_bg(),
+            radius: Radius::default(),
+            fill_mode: FillMode::Full,
+            snap: false,
         };
 
-        let participants_in_voice: Vec<_> = self.participants.values().filter(|i| i.in_voice).collect();
-        let participants_in_chat: Vec<_> = self.participants.values().filter(|i| !i.in_voice).collect();
+        let participants_in_voice: Vec<_> =
+            self.participants.values().filter(|i| i.in_voice).collect();
+        let participants_in_chat: Vec<_> =
+            self.participants.values().filter(|i| !i.in_voice).collect();
 
         let mut sidebar_elements = Vec::new();
-        sidebar_elements.extend(Self::render_members_section("IN VOICE", participants_in_voice));
-        sidebar_elements.extend(Self::render_members_section("IN CHAT", participants_in_chat));
+        sidebar_elements.extend(Self::render_members_section(
+            "IN VOICE",
+            participants_in_voice,
+        ));
+        sidebar_elements.extend(Self::render_members_section(
+            "IN CHAT",
+            participants_in_chat,
+        ));
 
         let mut sidebar_column = iced::widget::Column::new();
         for element in sidebar_elements {
             sidebar_column = sidebar_column.push(element);
         }
 
-        let is_in_voice = self.participants.get(&self.user_id).map(|p| p.in_voice).unwrap_or(false);
+        let is_in_voice = self
+            .participants
+            .get(&self.user_id)
+            .map(|p| p.in_voice)
+            .unwrap_or(false);
 
         let disconnect_button = container(
             Widgets::container_button(
-                container(text(if is_in_voice { "Leave voice" } else { "Join voice" }).size(14))
-                .padding(Padding {top: 16.0, right: 24.0, bottom: 16.0, left: 24.0})
+                container(
+                    text(if is_in_voice {
+                        "Leave voice"
+                    } else {
+                        "Join voice"
+                    })
+                    .size(14),
+                )
+                .padding(Padding {
+                    top: 16.0,
+                    right: 24.0,
+                    bottom: 16.0,
+                    left: 24.0,
+                })
                 .align_x(Alignment::Center)
                 .align_y(Alignment::Center)
-                .width(Length::Fill).height(48)
-            ).on_press(RoomPageMessage::JoinLeaveToggle.into()).style(|theme, status| {
+                .width(Length::Fill)
+                .height(48),
+            )
+            .on_press(RoomPageMessage::JoinLeaveToggle.into())
+            .style(|theme, status| {
                 if status == Status::Hovered || status == Status::Pressed {
                     button::Style {
                         background: Some(Background::Color(text_primary())),
@@ -125,39 +155,64 @@ impl RoomPage {
                     }
                 }
             }),
-        ).width(214).padding(Padding { left: 16.0, right: 16.0, ..Padding::default() });
+        )
+        .width(214)
+        .padding(Padding {
+            left: 16.0,
+            right: 16.0,
+            ..Padding::default()
+        });
 
         let mute_slider = container(Self::mute_slider(self.muted))
-            .padding(Padding { bottom: 24.0, left: 16.0, right: 16.0, top: 16.0 })
+            .padding(Padding {
+                bottom: 24.0,
+                left: 16.0,
+                right: 16.0,
+                top: 16.0,
+            })
             .width(Length::Fill)
             .align_x(Alignment::Center);
 
-        let left_sidebar = container(
-            sidebar_column
-                .push(space::vertical())
-                .push(if self.is_in_voice() { mute_slider } else { container("") })
-        )
-            .width(214) // TODO: adaptive or not?
-            .height(Length::Fill);
+        let left_sidebar = container(sidebar_column.push(space::vertical()).push(
+            if self.is_in_voice() {
+                mute_slider
+            } else {
+                container("")
+            },
+        ))
+        .width(214) // TODO: adaptive or not?
+        .height(Length::Fill);
 
         let mut messages_column = column!();
         for chat_msg in self.chat_history.values() {
-            messages_column = messages_column.push(
-                Self::chat_message(chat_msg.username.clone(), chat_msg.message.clone(), chat_msg.time.clone())
-            );
+            messages_column = messages_column.push(Self::chat_message(
+                chat_msg.username.clone(),
+                chat_msg.message.clone(),
+                chat_msg.time.clone(),
+            ));
         }
 
         let messages_container = Scrollable::with_direction(
-            container(messages_column).align_y(Alignment::End).padding(Padding { right: 16.0, bottom: 16.0, left: 16.0, top: 0.0 }),
-            Direction::Vertical(Scrollbar::new().width(4).margin(2).scroller_width(2))
-        ).id(Id::new("chat_area_scroll")).height(Length::Fill).style(|theme, status| {
+            container(messages_column)
+                .align_y(Alignment::End)
+                .padding(Padding {
+                    right: 16.0,
+                    bottom: 16.0,
+                    left: 16.0,
+                    top: 0.0,
+                }),
+            Direction::Vertical(Scrollbar::new().width(4).margin(2).scroller_width(2)),
+        )
+        .id(Id::new("chat_area_scroll"))
+        .height(Length::Fill)
+        .style(|theme, status| {
             let rail = Rail {
                 background: Some(Background::Color(Color::TRANSPARENT)),
                 border: Border::default(),
                 scroller: Scroller {
                     background: Background::Color(text_chat_header()),
-                    border: border::rounded(12)
-                }
+                    border: border::rounded(12),
+                },
             };
 
             scrollable::Style {
@@ -172,48 +227,54 @@ impl RoomPage {
             }
         });
 
-        let chat_area = container(
-            column!(
-                messages_container,
-                container(
-                    Widgets::input_with_submit(
-                        "Send message...",
-                        &mut self.chat_message.clone(),
-                        |v| RoomPageMessage::ChatMessageChanged(v).into(),
-                        !self.chat_message.is_empty(),
-                        RoomPageMessage::ChatMessageSubmitted.into(),
-                        Length::Fill,
-                        48
-                    )
-                ).padding(Padding { right: 16.0, bottom: 16.0, left: 16.0, top: 0.0 })
-            )
-        )
-            .width(Length::Fill)
-            .height(Length::Fill);
+        let chat_area = container(column!(
+            messages_container,
+            container(Widgets::input_with_submit(
+                "Send message...",
+                &mut self.chat_message.clone(),
+                |v| RoomPageMessage::ChatMessageChanged(v).into(),
+                !self.chat_message.is_empty(),
+                RoomPageMessage::ChatMessageSubmitted.into(),
+                Length::Fill,
+                48
+            ))
+            .padding(Padding {
+                right: 16.0,
+                bottom: 16.0,
+                left: 16.0,
+                top: 0.0
+            })
+        ))
+        .width(Length::Fill)
+        .height(Length::Fill);
 
-        let main_content_area = container(
-            row!(
-                left_sidebar,
-                rule::vertical(1).style(rule_style),
-                chat_area,
-            )
-        )
-            .width(Length::Fill)
-            .height(Length::Fill);
+        let main_content_area = container(row!(
+            left_sidebar,
+            rule::vertical(1).style(rule_style),
+            chat_area,
+        ))
+        .width(Length::Fill)
+        .height(Length::Fill);
 
         let settings_button = container(
-            Widgets::icon_button(Icons::gear_six_fill(None, 24)).on_press(RoomPageMessage::SettingsToggle.into())
-        ).align_y(Alignment::Center).height(48);
-
-        let bottom_bar = container(
-            row!(
-                disconnect_button,
-                space::horizontal(),
-                settings_button,
-            )
+            Widgets::icon_button(Icons::gear_six_fill(None, 24))
+                .on_press(RoomPageMessage::SettingsToggle.into()),
         )
-            .width(Length::Fill)
-            .padding(Padding { right: 16.0, bottom: 16.0, left: 0.0, top: 16.0 });
+        .align_y(Alignment::Center)
+        .height(48);
+
+        let bottom_bar = container(row!(
+            disconnect_button,
+            space::horizontal(),
+            settings_button,
+        ))
+        .width(Length::Fill)
+        .padding(Padding {
+            right: 16.0,
+            bottom: 16.0,
+            left: 0.0,
+            top: 16.0,
+        });
 
         let window_area = iced::widget::column!(
             rule::horizontal(1).style(rule_style),
@@ -222,7 +283,9 @@ impl RoomPage {
             bottom_bar
         );
 
-        container(window_area).width(Length::Fill).height(Length::Fill)
+        container(window_area)
+            .width(Length::Fill)
+            .height(Length::Fill)
     }
 
     fn chat_message<'a>(username: String, message: String, time: String) -> Container<'a, Message> {
@@ -234,31 +297,26 @@ impl RoomPage {
                     text(time).color(text_chat_header()).size(12)
                 ),
                 text(message).color(text_primary()).size(14)
-            ).spacing(4)
-        ).padding(8)
+            )
+            .spacing(4),
+        )
+        .padding(8)
     }
 
     fn mute_slider<'a>(muted: bool) -> iced::widget::Button<'a, Message> {
-        let inner_circle_style = |_theme: &iced::Theme| {
-            Style {
-                background: Some(Background::Color(slider_thumb())),
-                border: border::rounded(30),
-                ..Style::default()
-            }
+        let inner_circle_style = |_theme: &iced::Theme| Style {
+            background: Some(Background::Color(slider_thumb())),
+            border: border::rounded(30),
+            ..Style::default()
         };
 
-        let outer_container_style = |_theme: &iced::Theme| {
-            Style {
-                background: Some(Background::Color(slider_bg())),
-                border: border::rounded(20),
-                ..Style::default()
-            }
+        let outer_container_style = |_theme: &iced::Theme| Style {
+            background: Some(Background::Color(slider_bg())),
+            border: border::rounded(20),
+            ..Style::default()
         };
 
-        let inner_circle = container("")
-            .width(12)
-            .height(12)
-            .style(inner_circle_style);
+        let inner_circle = container("").width(12).height(12).style(inner_circle_style);
 
         let inner_circle_position = if muted {
             Horizontal::Left
@@ -291,10 +349,15 @@ impl RoomPage {
             Icons::microphone_fill(icon_right_color, 24),
         );
 
-        Widgets::container_button(container(row.spacing(8).align_y(Vertical::Center))).on_press(RoomPageMessage::MuteToggle.into())
+        Widgets::container_button(container(row.spacing(8).align_y(Vertical::Center)))
+            .on_press(RoomPageMessage::MuteToggle.into())
     }
 
-    fn member(username: &str, in_voice: bool, _muted: bool) -> iced::widget::Container<'static, Message> {
+    fn member(
+        username: &str,
+        in_voice: bool,
+        _muted: bool,
+    ) -> iced::widget::Container<'static, Message> {
         let icon = if in_voice {
             Icons::microphone_fill(color_success(), 16)
         } else {
@@ -305,12 +368,26 @@ impl RoomPage {
         container(
             row!(
                 icon,
-                container(text(username_owned).size(14).color(text_primary())).padding(Padding { top: 1.2, ..Padding::default() })
-            ).spacing(8)
-        ).padding(Padding { top: 8.0, right: 12.0, bottom: 8.0, left: 12.0 }).width(Length::Fill)
+                container(text(username_owned).size(14).color(text_primary())).padding(Padding {
+                    top: 1.2,
+                    ..Padding::default()
+                })
+            )
+            .spacing(8),
+        )
+        .padding(Padding {
+            top: 8.0,
+            right: 12.0,
+            bottom: 8.0,
+            left: 12.0,
+        })
+        .width(Length::Fill)
     }
 
-    fn render_members_section(title: &str, participants: Vec<&ParticipantInfo>) -> Vec<Element<'static, Message>> {
+    fn render_members_section(
+        title: &str,
+        participants: Vec<&ParticipantInfo>,
+    ) -> Vec<Element<'static, Message>> {
         if participants.is_empty() {
             return Vec::new();
         }
@@ -320,153 +397,187 @@ impl RoomPage {
         // Add title
         let title_owned = title.to_string();
         elements.push(
-            container(
-                text(title_owned).size(12).color(text_secondary())
-            ).padding(Padding {top: 16.0, right: 16.0, bottom: 4.0, left: 16.0}).width(Length::Fill)
-            .into()
+            container(text(title_owned).size(12).color(text_secondary()))
+                .padding(Padding {
+                    top: 16.0,
+                    right: 16.0,
+                    bottom: 4.0,
+                    left: 16.0,
+                })
+                .width(Length::Fill)
+                .into(),
         );
 
         // Add members
         let mut members_column = iced::widget::Column::new();
         for participant in participants {
-            members_column = members_column.push(Self::member(&participant.username, participant.in_voice, false));
+            members_column = members_column.push(Self::member(
+                &participant.username,
+                participant.in_voice,
+                false,
+            ));
         }
 
         elements.push(
-            container(members_column).padding(4).width(Length::Fill).into()
+            container(members_column)
+                .padding(4)
+                .width(Length::Fill)
+                .into(),
         );
 
         elements
     }
 
     fn debug_border() -> fn(&Theme) -> Style {
-        |_theme: &Theme| {
-            Style {
-                border: border::width(1).color(debug_red()),
-                ..Style::default()
-            }
+        |_theme: &Theme| Style {
+            border: border::width(1).color(debug_red()),
+            ..Style::default()
         }
     }
 
     fn is_in_voice(&self) -> bool {
-        self.participants.get(&self.user_id).map(|p| p.in_voice).unwrap_or(false)
+        self.participants
+            .get(&self.user_id)
+            .map(|p| p.in_voice)
+            .unwrap_or(false)
     }
 }
 
 impl Page for RoomPage {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::RoomPage(room_message) => {
-                match room_message {
-                    RoomPageMessage::MuteToggle => {
-                        self.muted = !self.muted;
+            Message::RoomPage(room_message) => match room_message {
+                RoomPageMessage::MuteToggle => {
+                    self.muted = !self.muted;
+                }
+                RoomPageMessage::JoinLeaveToggle => {
+                    if self.is_in_voice() {
+                        return Task::done(Message::ExecuteVoiceCommand(
+                            VoiceCommand::LeaveVoiceChannel,
+                        ));
                     }
-                    RoomPageMessage::JoinLeaveToggle => {
-                        if self.is_in_voice() {
-                            return Task::done(Message::ExecuteVoiceCommand(VoiceCommand::LeaveVoiceChannel))
-                        }
 
-                        return Task::done(Message::ExecuteVoiceCommand(VoiceCommand::JoinVoiceChannel));
+                    return Task::done(Message::ExecuteVoiceCommand(
+                        VoiceCommand::JoinVoiceChannel,
+                    ));
+                }
+                RoomPageMessage::ChatMessageChanged(value) => {
+                    if value.len() <= 2000 {
+                        self.chat_message = value;
                     }
-                    RoomPageMessage::ChatMessageChanged(value) => {
-                        if value.len() <= 2000 {
-                            self.chat_message = value;
-                        }
+                }
+                RoomPageMessage::ChatMessageSubmitted => {
+                    if !self.chat_message.is_empty() {
+                        let message = self.chat_message.clone();
+                        self.chat_message.clear();
+                        return Task::done(Message::ExecuteVoiceCommand(
+                            VoiceCommand::SendChatMessage(message),
+                        ));
                     }
-                    RoomPageMessage::ChatMessageSubmitted => {
-                        if !self.chat_message.is_empty() {
-                            let message = self.chat_message.clone();
-                            self.chat_message.clear();
-                            return Task::done(Message::ExecuteVoiceCommand(
-                                VoiceCommand::SendChatMessage(message)
-                            ));
-                        }
-                    }
-                    RoomPageMessage::SettingsToggle => {
-                        self.show_settings = !self.show_settings;
-                    }
+                }
+                RoomPageMessage::SettingsToggle => {
+                    self.show_settings = !self.show_settings;
                 }
             },
             Message::SettingsPage(_) => {
                 return self.settings.update(message);
             }
-            Message::VoiceCommandResult(result) => {
-                match result {
-                    VoiceCommandResult::JoinVoiceChannel(status) => {
-                        if status.is_ok() {
-                            if let Some(user) = self.participants.get_mut(&self.user_id) {
-                                user.in_voice = true;
-                            }
-                        } else {
-                            warn!("Failed to join voice: {}", status.err().unwrap());
+            Message::VoiceCommandResult(result) => match result {
+                VoiceCommandResult::JoinVoiceChannel(status) => {
+                    if status.is_ok() {
+                        if let Some(user) = self.participants.get_mut(&self.user_id) {
+                            user.in_voice = true;
                         }
+                    } else {
+                        warn!("Failed to join voice: {}", status.err().unwrap());
                     }
-                    VoiceCommandResult::LeaveVoiceChannel(status) => {
-                        if status.is_ok() {
-                            if let Some(user) = self.participants.get_mut(&self.user_id) {
-                                user.in_voice = false;
-                            }
-                        } else {
-                            warn!("Failed to leave voice: {}", status.err().unwrap());
-                        }
-                    }
-                    VoiceCommandResult::SendChatMessage(status) => {
-                        if let Err(e) = status {
-                            warn!("Failed to send message: {}", e);
-                        }
-                    }
-                    _ => { debug!("Ignoring voice command result in room page: {:?}", result); }
                 }
-            }
-            Message::ServerEventReceived(event) => {
-                match event {
-                    VoiceClientEvent::ParticipantsList { user_id, participants } => {
-                        self.user_id = user_id;
-                        self.participants = participants.into_iter()
-                            .map(|info| (info.user_id, info))
-                            .collect();
+                VoiceCommandResult::LeaveVoiceChannel(status) => {
+                    if status.is_ok() {
+                        if let Some(user) = self.participants.get_mut(&self.user_id) {
+                            user.in_voice = false;
+                        }
+                    } else {
+                        warn!("Failed to leave voice: {}", status.err().unwrap());
                     }
-                    VoiceClientEvent::UserJoinedServer { user_id, username } => {
-                        debug!("User {} joined server", username);
-                        self.participants.insert(user_id, voiceapp_sdk::ParticipantInfo {
+                }
+                VoiceCommandResult::SendChatMessage(status) => {
+                    if let Err(e) = status {
+                        warn!("Failed to send message: {}", e);
+                    }
+                }
+                _ => {
+                    debug!("Ignoring voice command result in room page: {:?}", result);
+                }
+            },
+            Message::ServerEventReceived(event) => match event {
+                VoiceClientEvent::ParticipantsList {
+                    user_id,
+                    participants,
+                } => {
+                    self.user_id = user_id;
+                    self.participants = participants
+                        .into_iter()
+                        .map(|info| (info.user_id, info))
+                        .collect();
+                }
+                VoiceClientEvent::UserJoinedServer { user_id, username } => {
+                    debug!("User {} joined server", username);
+                    self.participants.insert(
+                        user_id,
+                        voiceapp_sdk::ParticipantInfo {
                             user_id,
                             username,
                             in_voice: false,
-                        });
-                    }
-                    VoiceClientEvent::UserJoinedVoice { user_id } => {
-                        debug!("User {} joined voice", user_id);
-                        if let Some(user) = self.participants.get_mut(&user_id) {
-                            user.in_voice = true;
-                        }
-                    }
-                    VoiceClientEvent::UserLeftVoice { user_id } => {
-                        debug!("User {} left voice", user_id);
-                        if let Some(user) = self.participants.get_mut(&user_id) {
-                            user.in_voice = false;
-                        }
-                    }
-                    VoiceClientEvent::UserLeftServer { user_id } => {
-                        debug!("User {} left server", user_id);
-                        self.participants.remove(&user_id);
-                    }
-                    VoiceClientEvent::UserSentMessage { user_id, timestamp, message } => {
-                        if let Some(participant) = self.participants.get(&user_id) {
-                            let chat_msg = ChatMessage::new(participant.username.clone(), message, timestamp);
-                            self.chat_history.insert(timestamp, chat_msg);
-
-
-                            return iced::widget::operation::snap_to(Id::new("chat_area_scroll"), scrollable::RelativeOffset::END)
-                        }
+                        },
+                    );
+                }
+                VoiceClientEvent::UserJoinedVoice { user_id } => {
+                    debug!("User {} joined voice", user_id);
+                    if let Some(user) = self.participants.get_mut(&user_id) {
+                        user.in_voice = true;
                     }
                 }
-            }
+                VoiceClientEvent::UserLeftVoice { user_id } => {
+                    debug!("User {} left voice", user_id);
+                    if let Some(user) = self.participants.get_mut(&user_id) {
+                        user.in_voice = false;
+                    }
+                }
+                VoiceClientEvent::UserLeftServer { user_id } => {
+                    debug!("User {} left server", user_id);
+                    self.participants.remove(&user_id);
+                }
+                VoiceClientEvent::UserSentMessage {
+                    user_id,
+                    timestamp,
+                    message,
+                } => {
+                    if let Some(participant) = self.participants.get(&user_id) {
+                        let chat_msg =
+                            ChatMessage::new(participant.username.clone(), message, timestamp);
+                        self.chat_history.insert(timestamp, chat_msg);
+
+                        return iced::widget::operation::snap_to(
+                            Id::new("chat_area_scroll"),
+                            scrollable::RelativeOffset::END,
+                        );
+                    }
+                }
+            },
             Message::KeyPressed(key) => {
-                if self.show_settings && matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)) {
+                if self.show_settings
+                    && matches!(
+                        key,
+                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+                    )
+                {
                     self.show_settings = false;
                 }
             }
-            _ => { debug!("Ignoring event in RoomPage {:?}", message); }
+            _ => {
+                debug!("Ignoring event in RoomPage {:?}", message);
+            }
         }
 
         Task::none()

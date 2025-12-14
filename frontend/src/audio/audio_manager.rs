@@ -1,9 +1,9 @@
-use cpal::Stream;
 use async_channel::Sender;
+use cpal::Stream;
+use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
-use std::sync::{Arc, Mutex};
-use voiceapp_sdk::{VoiceDecoder, VoiceInputPipeline, VoiceInputPipelineConfig, voiceapp_protocol};
+use voiceapp_sdk::{voiceapp_protocol, VoiceDecoder, VoiceInputPipeline, VoiceInputPipelineConfig};
 
 use crate::audio::input::create_input_stream;
 use crate::audio::output::{create_output_stream, AudioOutputHandle};
@@ -43,7 +43,9 @@ impl AudioManager {
         let (stream, sample_rate, receiver) = create_input_stream()?;
 
         // Create voice input pipeline with detected sample rate
-        let pipeline = VoiceInputPipeline::new(VoiceInputPipelineConfig { sample_rate: sample_rate as usize })?;
+        let pipeline = VoiceInputPipeline::new(VoiceInputPipelineConfig {
+            sample_rate: sample_rate as usize,
+        })?;
         let voice_input_tx = pipeline.input_sender();
         let pipeline_output_rx = pipeline.output_receiver();
 

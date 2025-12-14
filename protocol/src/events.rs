@@ -153,4 +153,3 @@ pub fn decode_user_sent_message(data: &[u8]) -> io::Result<(u64, u64, String)> {
 
     Ok((user_id, timestamp, message))
 }
-

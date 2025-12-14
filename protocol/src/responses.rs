@@ -2,8 +2,8 @@
 
 use std::io;
 
-use crate::packet_id::{serialize_packet, PacketId};
 use crate::events::ParticipantInfo;
+use crate::packet_id::{serialize_packet, PacketId};
 
 /// Response to login request, contains user id, voice token, and current participants
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,7 +18,11 @@ pub struct LoginResponse {
 /// Encode login response packet
 /// Format: [packet_id: u8][payload_len: u16][id: u64 BE][voice_token: u64 BE][count: u16]
 ///         [user_id: u64 BE][username_len: u16 BE][username: bytes][in_voice: u8]...
-pub fn encode_login_response(id: u64, voice_token: u64, participants: &[ParticipantInfo]) -> Vec<u8> {
+pub fn encode_login_response(
+    id: u64,
+    voice_token: u64,
+    participants: &[ParticipantInfo],
+) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&id.to_be_bytes());
     payload.extend_from_slice(&voice_token.to_be_bytes());
@@ -117,10 +121,18 @@ pub fn decode_login_response(data: &[u8]) -> io::Result<LoginResponse> {
         let in_voice = data[pos] != 0;
         pos += 1;
 
-        participants.push(ParticipantInfo { user_id, username, in_voice });
+        participants.push(ParticipantInfo {
+            user_id,
+            username,
+            in_voice,
+        });
     }
 
-    Ok(LoginResponse { id, voice_token, participants })
+    Ok(LoginResponse {
+        id,
+        voice_token,
+        participants,
+    })
 }
 
 /// Decode UDP auth response payload

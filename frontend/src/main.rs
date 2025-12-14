@@ -1,29 +1,32 @@
-use iced::{Font, Theme};
-use iced::Theme::Dark;
 use iced::theme::Palette;
+use iced::Theme::Dark;
+use iced::{Font, Theme};
 use tracing_subscriber;
 
-mod icons;
+mod application;
+mod audio;
 mod colors;
+mod icons;
 mod pages;
 mod widgets;
-mod audio;
-mod application;
 
-use colors::*;
 use crate::application::Application;
+use colors::*;
 
 fn main() -> iced::Result {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
-    
+
     let theme = |_state: &Application| {
-        Theme::custom("dark".to_string(), Palette {
-            background: DARK_BACKGROUND,
-            text: text_primary(),
-            ..Dark.palette()
-        })
+        Theme::custom(
+            "dark".to_string(),
+            Palette {
+                background: DARK_BACKGROUND,
+                text: text_primary(),
+                ..Dark.palette()
+            },
+        )
     };
 
     iced::application(Application::new, Application::update, Application::view)

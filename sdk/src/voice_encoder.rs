@@ -1,4 +1,4 @@
-use opus::{Channels, Encoder, Bitrate};
+use opus::{Bitrate, Channels, Encoder};
 use voiceapp_protocol::VoiceData;
 
 pub const SAMPLE_RATE: u32 = 48000;
@@ -20,15 +20,15 @@ impl VoiceEncoder {
         let mut encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, opus::Application::Voip)
             .map_err(|e| format!("opus error: {}", e.to_string()))?;
 
-        encoder.set_bitrate(Bitrate::Bits(ENCODING_BITRATE)).unwrap();
+        encoder
+            .set_bitrate(Bitrate::Bits(ENCODING_BITRATE))
+            .unwrap();
 
-        Ok(
-            VoiceEncoder {
-                encoder,
-                sequence: 0,
-                timestamp: 0,
-            }
-        )
+        Ok(VoiceEncoder {
+            encoder,
+            sequence: 0,
+            timestamp: 0,
+        })
     }
 
     /// Encode audio samples to Opus format
@@ -38,7 +38,11 @@ impl VoiceEncoder {
             return Ok(None);
         }
 
-        assert!(samples.len() <= OPUS_FRAME_SAMPLES, "Samples must be <= {} samples", OPUS_FRAME_SAMPLES);
+        assert!(
+            samples.len() <= OPUS_FRAME_SAMPLES,
+            "Samples must be <= {} samples",
+            OPUS_FRAME_SAMPLES
+        );
 
         // Pad with zeros to reach frame size
         let mut padded_samples = samples.to_vec();
@@ -47,7 +51,9 @@ impl VoiceEncoder {
         }
 
         let mut opus_frame = vec![0u8; 4000]; // Max Opus frame size
-        let encoded_size = self.encoder.encode_float(&padded_samples, &mut opus_frame)
+        let encoded_size = self
+            .encoder
+            .encode_float(&padded_samples, &mut opus_frame)
             .map_err(|e| format!("Failed to encode Opus frame: {:?}", e))?;
         opus_frame.truncate(encoded_size);
 

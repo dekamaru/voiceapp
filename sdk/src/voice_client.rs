@@ -1,13 +1,13 @@
+use async_channel::{unbounded, Receiver, Sender};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::RwLock;
-use async_channel::{Sender, Receiver, unbounded};
 use tracing::{debug, error, info};
 
-use voiceapp_protocol::{PacketId, ParticipantInfo};
 use crate::voice_decoder::VoiceDecoder;
+use voiceapp_protocol::{PacketId, ParticipantInfo};
 
 /// Errors that can occur with VoiceClient
 #[derive(Debug, Clone)]
@@ -35,7 +35,10 @@ impl std::error::Error for VoiceClientError {}
 #[derive(Debug, Clone)]
 pub enum VoiceClientEvent {
     /// Initial participant list sent after successful connection
-    ParticipantsList { user_id: u64, participants: Vec<ParticipantInfo> },
+    ParticipantsList {
+        user_id: u64,
+        participants: Vec<ParticipantInfo>,
+    },
     /// A user joined the server
     UserJoinedServer { user_id: u64, username: String },
     /// A user joined a voice channel
@@ -45,7 +48,11 @@ pub enum VoiceClientEvent {
     /// A user left the server
     UserLeftServer { user_id: u64 },
     /// A user sent a chat message
-    UserSentMessage { user_id: u64, timestamp: u64, message: String },
+    UserSentMessage {
+        user_id: u64,
+        timestamp: u64,
+        message: String,
+    },
 }
 
 /// Client-side state for voice connection
@@ -84,8 +91,7 @@ impl VoiceClient {
 
         // Create decoder
         let decoder = Arc::new(
-            VoiceDecoder::new()
-                .map_err(|e| VoiceClientError::SystemError(e.to_string()))?
+            VoiceDecoder::new().map_err(|e| VoiceClientError::SystemError(e.to_string()))?,
         );
 
         // Create UDP channels
@@ -125,7 +131,12 @@ impl VoiceClient {
         self.client_events_rx.clone()
     }
 
-    pub async fn connect(&mut self, management_server_addr: &str, voice_server_addr: &str, username: &str) -> Result<(), VoiceClientError> {
+    pub async fn connect(
+        &mut self,
+        management_server_addr: &str,
+        voice_server_addr: &str,
+        username: &str,
+    ) -> Result<(), VoiceClientError> {
         // Connect TCP socket
         let tcp_socket = TcpStream::connect(management_server_addr)
             .await
@@ -139,9 +150,9 @@ impl VoiceClient {
             .map_err(|e| VoiceClientError::ConnectionFailed(format!("UDP bind failed: {}", e)))?;
 
         // Connect UDP socket to server address
-        udp_socket.connect(voice_server_addr)
-            .await
-            .map_err(|e| VoiceClientError::ConnectionFailed(format!("UDP connect failed: {}", e)))?;
+        udp_socket.connect(voice_server_addr).await.map_err(|e| {
+            VoiceClientError::ConnectionFailed(format!("UDP connect failed: {}", e))
+        })?;
 
         info!("[Voice] Connected to {}", voice_server_addr);
 
@@ -164,8 +175,17 @@ impl VoiceClient {
         debug!("Authenticating as '{}'", username);
 
         // TCP authentication
-        self.request_tx.send(voiceapp_protocol::encode_login_request(username)).await.map_err(|_| VoiceClientError::Disconnected)?;
-        let response = self.wait_for_response_with(PacketId::LoginResponse, 5, voiceapp_protocol::decode_login_response).await?;
+        self.request_tx
+            .send(voiceapp_protocol::encode_login_request(username))
+            .await
+            .map_err(|_| VoiceClientError::Disconnected)?;
+        let response = self
+            .wait_for_response_with(
+                PacketId::LoginResponse,
+                5,
+                voiceapp_protocol::decode_login_response,
+            )
+            .await?;
 
         // Update client state with user_id and voice_token
         let mut state = self.state.write().await;
@@ -181,43 +201,55 @@ impl VoiceClient {
         drop(state); // Release lock
 
         // Send initial participants list event
-        let _ = self.client_events_tx.send(VoiceClientEvent::ParticipantsList {
-            user_id: response.id,
-            participants: participants_list,
-        }).await;
+        let _ = self
+            .client_events_tx
+            .send(VoiceClientEvent::ParticipantsList {
+                user_id: response.id,
+                participants: participants_list,
+            })
+            .await;
 
         info!("[Management] Authenticated, user_id={}", response.id);
 
         // UDP authentication (with retry logic: 3 attempts, 5s timeout each)
         let max_retries = 3;
         for attempt in 1..=max_retries {
-            debug!("[Voice] Sending auth request (attempt {}/{})", attempt, max_retries);
+            debug!(
+                "[Voice] Sending auth request (attempt {}/{})",
+                attempt, max_retries
+            );
 
             // Send VoiceAuthRequest
             let auth_request = voiceapp_protocol::encode_voice_auth_request(voice_token);
-            self.udp_send_tx.send(auth_request).await.map_err(|_| VoiceClientError::Disconnected)?;
+            self.udp_send_tx
+                .send(auth_request)
+                .await
+                .map_err(|_| VoiceClientError::Disconnected)?;
 
             // Wait for VoiceAuthResponse with 5s timeout
-            let timeout_result = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                async {
-                    loop {
-                        match self.udp_recv_rx.recv().await {
-                            Ok((packet_id, payload)) => {
-                                if packet_id == PacketId::VoiceAuthResponse {
-                                    return match voiceapp_protocol::decode_voice_auth_response(&payload) {
-                                        Ok(true) => Ok(()),
-                                        Ok(false) => Err(VoiceClientError::ConnectionFailed("Voice auth denied".to_string())),
-                                        Err(e) => Err(VoiceClientError::ConnectionFailed(e.to_string())),
+            let timeout_result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    match self.udp_recv_rx.recv().await {
+                        Ok((packet_id, payload)) => {
+                            if packet_id == PacketId::VoiceAuthResponse {
+                                return match voiceapp_protocol::decode_voice_auth_response(&payload)
+                                {
+                                    Ok(true) => Ok(()),
+                                    Ok(false) => Err(VoiceClientError::ConnectionFailed(
+                                        "Voice auth denied".to_string(),
+                                    )),
+                                    Err(e) => {
+                                        Err(VoiceClientError::ConnectionFailed(e.to_string()))
                                     }
-                                }
-                                // Ignore other packets, keep waiting for auth response
+                                };
                             }
-                            Err(_) => return Err(VoiceClientError::Disconnected),
+                            // Ignore other packets, keep waiting for auth response
                         }
+                        Err(_) => return Err(VoiceClientError::Disconnected),
                     }
                 }
-            ).await;
+            })
+            .await;
 
             match timeout_result {
                 Ok(Ok(())) => {
@@ -234,7 +266,9 @@ impl VoiceClient {
             }
         }
 
-        Err(VoiceClientError::Timeout("Voice authentication failed after 3 attempts".to_string()))
+        Err(VoiceClientError::Timeout(
+            "Voice authentication failed after 3 attempts".to_string(),
+        ))
     }
 
     pub async fn join_channel(&mut self) -> Result<(), VoiceClientError> {
@@ -338,7 +372,9 @@ impl VoiceClient {
             loop {
                 match event_rx.recv().await {
                     Ok((packet_id, payload)) => {
-                        if let Err(e) = Self::handle_event(&state, packet_id, payload, &client_events_tx).await {
+                        if let Err(e) =
+                            Self::handle_event(&state, packet_id, payload, &client_events_tx).await
+                        {
                             error!("Event handling error: {}", e);
                             break;
                         }
@@ -405,10 +441,9 @@ impl VoiceClient {
                 );
                 drop(s); // Release lock before sending event
 
-                let _ = client_events_tx.send(VoiceClientEvent::UserJoinedServer {
-                    user_id,
-                    username,
-                }).await;
+                let _ = client_events_tx
+                    .send(VoiceClientEvent::UserJoinedServer { user_id, username })
+                    .await;
 
                 debug!("User joined server: id={}", user_id);
                 Ok(())
@@ -421,7 +456,9 @@ impl VoiceClient {
                 s.participants.remove(&user_id);
                 drop(s); // Release lock before sending event
 
-                let _ = client_events_tx.send(VoiceClientEvent::UserLeftServer { user_id }).await;
+                let _ = client_events_tx
+                    .send(VoiceClientEvent::UserLeftServer { user_id })
+                    .await;
 
                 debug!("User left server: id={}", user_id);
                 Ok(())
@@ -436,7 +473,9 @@ impl VoiceClient {
                 }
                 drop(s); // Release lock before sending event
 
-                let _ = client_events_tx.send(VoiceClientEvent::UserJoinedVoice { user_id }).await;
+                let _ = client_events_tx
+                    .send(VoiceClientEvent::UserJoinedVoice { user_id })
+                    .await;
 
                 debug!("User joined voice: id={}", user_id);
                 Ok(())
@@ -451,20 +490,25 @@ impl VoiceClient {
                 }
                 drop(s); // Release lock before sending event
 
-                let _ = client_events_tx.send(VoiceClientEvent::UserLeftVoice { user_id }).await;
+                let _ = client_events_tx
+                    .send(VoiceClientEvent::UserLeftVoice { user_id })
+                    .await;
 
                 debug!("User left voice: id={}", user_id);
                 Ok(())
             }
             PacketId::UserSentMessage => {
-                let (user_id, timestamp, message) = voiceapp_protocol::decode_user_sent_message(&payload)
-                    .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
+                let (user_id, timestamp, message) =
+                    voiceapp_protocol::decode_user_sent_message(&payload)
+                        .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
 
-                let _ = client_events_tx.send(VoiceClientEvent::UserSentMessage {
-                    user_id,
-                    timestamp,
-                    message: message.clone(),
-                }).await;
+                let _ = client_events_tx
+                    .send(VoiceClientEvent::UserSentMessage {
+                        user_id,
+                        timestamp,
+                        message: message.clone(),
+                    })
+                    .await;
 
                 debug!("User sent message: id={}, timestamp={}", user_id, timestamp);
                 Ok(())
@@ -486,25 +530,23 @@ impl VoiceClient {
     where
         F: Fn(&[u8]) -> std::io::Result<T>,
     {
-        let timeout = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            async {
-                loop {
-                    match self.response_rx.recv().await {
-                        Ok((packet_id, payload)) => {
-                            if packet_id == expected_id {
-                                return Ok(payload);
-                            }
+        let timeout = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
+            loop {
+                match self.response_rx.recv().await {
+                    Ok((packet_id, payload)) => {
+                        if packet_id == expected_id {
+                            return Ok(payload);
                         }
-                        Err(_) => return Err(VoiceClientError::Disconnected),
                     }
+                    Err(_) => return Err(VoiceClientError::Disconnected),
                 }
-            },
-        );
+            }
+        });
 
         match timeout.await {
-            Ok(Ok(payload)) => decoder(&payload)
-                .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string())),
+            Ok(Ok(payload)) => {
+                decoder(&payload).map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))
+            }
             Ok(Err(e)) => Err(e),
             Err(_) => Err(VoiceClientError::Timeout(format!(
                 "packet {}",

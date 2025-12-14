@@ -1,3 +1,5 @@
+use rand::random;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -6,23 +8,18 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, error, info};
 use voiceapp_protocol::{
-    parse_packet, PacketId, ParticipantInfo,
-    decode_login_request, encode_login_response,
-    encode_user_joined_server, encode_user_left_server,
-    encode_user_joined_voice, encode_user_left_voice,
-    encode_join_voice_channel_response, encode_leave_voice_channel_response,
-    decode_chat_message_request, encode_chat_message_response,
-    encode_user_sent_message,
+    decode_chat_message_request, decode_login_request, encode_chat_message_response,
+    encode_join_voice_channel_response, encode_leave_voice_channel_response, encode_login_response,
+    encode_user_joined_server, encode_user_joined_voice, encode_user_left_server,
+    encode_user_left_voice, encode_user_sent_message, parse_packet, PacketId, ParticipantInfo,
 };
-use std::collections::HashMap;
-use rand::random;
 
 /// Broadcast message sent to all connected clients
 #[derive(Clone, Debug)]
 pub struct BroadcastMessage {
     pub sender_addr: Option<SocketAddr>, // None means server broadcast (all receive)
-    pub for_all: bool,                    // If true, include sender; if false, exclude sender
-    pub packet_data: Vec<u8>,             // Complete encoded packet to forward
+    pub for_all: bool,                   // If true, include sender; if false, exclude sender
+    pub packet_data: Vec<u8>,            // Complete encoded packet to forward
 }
 
 /// Represents a connected user with their voice channel status and authentication token
@@ -33,7 +30,6 @@ pub struct User {
     pub in_voice: bool,
     pub token: u64, // Authentication token for UDP connections
 }
-
 
 /// ManagementServer handles TCP connections, user login, presence management,
 /// and broadcasts events to all connected clients
@@ -169,23 +165,42 @@ impl ManagementServer {
                 // Dispatch to appropriate handler based on packet type
                 match packet_id {
                     PacketId::LoginRequest => {
-                        if let Err(e) = self.handle_login_request(socket, peer_addr, &payload).await {
+                        if let Err(e) = self.handle_login_request(socket, peer_addr, &payload).await
+                        {
                             error!("[{}] Failed to handle login request: {}", peer_addr, e);
                         }
                     }
                     PacketId::JoinVoiceChannelRequest => {
-                        if let Err(e) = self.handle_join_voice_channel_request(socket, peer_addr).await {
-                            error!("[{}] Failed to handle join voice channel request: {}", peer_addr, e);
+                        if let Err(e) = self
+                            .handle_join_voice_channel_request(socket, peer_addr)
+                            .await
+                        {
+                            error!(
+                                "[{}] Failed to handle join voice channel request: {}",
+                                peer_addr, e
+                            );
                         }
                     }
                     PacketId::LeaveVoiceChannelRequest => {
-                        if let Err(e) = self.handle_leave_voice_channel_request(socket, peer_addr).await {
-                            error!("[{}] Failed to handle leave voice channel request: {}", peer_addr, e);
+                        if let Err(e) = self
+                            .handle_leave_voice_channel_request(socket, peer_addr)
+                            .await
+                        {
+                            error!(
+                                "[{}] Failed to handle leave voice channel request: {}",
+                                peer_addr, e
+                            );
                         }
                     }
                     PacketId::ChatMessageRequest => {
-                        if let Err(e) = self.handle_chat_message_request(socket, peer_addr, &payload).await {
-                            error!("[{}] Failed to handle chat message request: {}", peer_addr, e);
+                        if let Err(e) = self
+                            .handle_chat_message_request(socket, peer_addr, &payload)
+                            .await
+                        {
+                            error!(
+                                "[{}] Failed to handle chat message request: {}",
+                                peer_addr, e
+                            );
                         }
                     }
                     _ => {
@@ -194,7 +209,10 @@ impl ManagementServer {
                 }
             }
             Err(e) => {
-                error!("[Management] Failed to parse packet from {}: {}", peer_addr, e);
+                error!(
+                    "[Management] Failed to parse packet from {}: {}",
+                    peer_addr, e
+                );
             }
         }
         Ok(true) // Continue processing
@@ -283,17 +301,24 @@ impl ManagementServer {
             for_all: false, // Exclude the sender (new user) from this broadcast
             packet_data: joined_packet,
         };
-        
+
         // Ignore broadcast send errors (they might happen if no subscribers)
         let _ = self.broadcast_tx.send(broadcast_msg);
 
-        debug!("[{}] User logged in: id={}, username={}", peer_addr, user_id, username_clone);
+        debug!(
+            "[{}] User logged in: id={}, username={}",
+            peer_addr, user_id, username_clone
+        );
 
         Ok(())
     }
 
     /// Handle join voice channel request: send response to caller and broadcast event excluding caller
-    async fn handle_join_voice_channel_request(&self, socket: &mut TcpStream, peer_addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    async fn handle_join_voice_channel_request(
+        &self,
+        socket: &mut TcpStream,
+        peer_addr: SocketAddr,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Get user ID and update in_voice state
         let user_id = {
             let mut users_lock = self.users.write().await;
@@ -314,8 +339,8 @@ impl ManagementServer {
         // Broadcast user joined voice event to all other clients (exclude caller)
         let joined_voice_packet = encode_user_joined_voice(user_id);
         let broadcast_msg = BroadcastMessage {
-            sender_addr: Some(peer_addr),  // Set sender to enable exclusion
-            for_all: false,                // Exclude the sender
+            sender_addr: Some(peer_addr), // Set sender to enable exclusion
+            for_all: false,               // Exclude the sender
             packet_data: joined_voice_packet,
         };
         let _ = self.broadcast_tx.send(broadcast_msg);
@@ -326,7 +351,11 @@ impl ManagementServer {
     }
 
     /// Handle leave voice channel request: send response to caller and broadcast event excluding caller
-    async fn handle_leave_voice_channel_request(&self, socket: &mut TcpStream, peer_addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    async fn handle_leave_voice_channel_request(
+        &self,
+        socket: &mut TcpStream,
+        peer_addr: SocketAddr,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Get user ID and update in_voice state
         let user_id = {
             let mut users_lock = self.users.write().await;
@@ -347,8 +376,8 @@ impl ManagementServer {
         // Broadcast user left voice event to all other clients (exclude caller)
         let left_voice_packet = encode_user_left_voice(user_id);
         let broadcast_msg = BroadcastMessage {
-            sender_addr: Some(peer_addr),  // Set sender to enable exclusion
-            for_all: false,                // Exclude the sender
+            sender_addr: Some(peer_addr), // Set sender to enable exclusion
+            for_all: false,               // Exclude the sender
             packet_data: left_voice_packet,
         };
 
@@ -394,7 +423,10 @@ impl ManagementServer {
             // Notify voice relay server to clean up UDP session for this user
             let _ = self.disconnect_tx.send(user.id);
 
-            debug!("[{}] User disconnected: id={}, username={}", peer_addr, user.id, user.username);
+            debug!(
+                "[{}] User disconnected: id={}, username={}",
+                peer_addr, user.id, user.username
+            );
         } else {
             debug!("[{}] User disconnected but was not in users map", peer_addr);
         }
@@ -439,7 +471,12 @@ impl ManagementServer {
         };
         let _ = self.broadcast_tx.send(broadcast_msg);
 
-        debug!("[{}] User sent message: id={}, len={}", peer_addr, user_id, message.len());
+        debug!(
+            "[{}] User sent message: id={}, len={}",
+            peer_addr,
+            user_id,
+            message.len()
+        );
 
         Ok(())
     }

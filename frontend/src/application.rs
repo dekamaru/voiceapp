@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use async_channel::Receiver;
-use iced::Task;
-use tokio::sync::Mutex;
-use voiceapp_sdk::{VoiceClient, VoiceClientEvent};
 use crate::audio::AudioManager;
 use crate::pages::login::{LoginPage, LoginPageMessage};
 use crate::pages::room::{RoomPage, RoomPageMessage};
 use crate::pages::settings::SettingsPageMessage;
+use async_channel::Receiver;
+use iced::Task;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use voiceapp_sdk::{VoiceClient, VoiceClientEvent};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -58,7 +58,8 @@ pub struct Application {
 impl Application {
     pub fn new() -> (Self, Task<Message>) {
         let voice_client = VoiceClient::new().expect("failed to init voice client");
-        let audio_manager = AudioManager::new(voice_client.get_decoder(), voice_client.get_udp_send_tx());
+        let audio_manager =
+            AudioManager::new(voice_client.get_decoder(), voice_client.get_udp_send_tx());
         let events_rx = voice_client.event_stream();
 
         (
@@ -66,9 +67,9 @@ impl Application {
                 page: Box::new(LoginPage::new()),
                 voice_client: Arc::new(Mutex::new(voice_client)),
                 events_rx,
-                audio_manager
+                audio_manager,
             },
-            Task::none()
+            Task::none(),
         )
     }
 
@@ -81,7 +82,7 @@ impl Application {
             Message::ExecuteVoiceCommand(command) => self.handle_voice_command(command),
             Message::VoiceCommandResult(VoiceCommandResult::Connect(Ok(()))) => {
                 self.page = Box::new(RoomPage::new());
-                Task::run(self.events_rx.clone(), |e| { Message::ServerEventReceived(e) })
+                Task::run(self.events_rx.clone(), |e| Message::ServerEventReceived(e))
             }
             Message::VoiceCommandResult(VoiceCommandResult::JoinVoiceChannel(Ok(()))) => {
                 // Start audio when join succeeds
@@ -111,58 +112,56 @@ impl Application {
         let client = self.voice_client.clone();
 
         match command {
-            VoiceCommand::Connect { management_addr, voice_addr, username } => {
-                Task::perform(
-                    async move {
-                        let mut guard = client.lock().await;
-                        guard.connect(&management_addr, &voice_addr, &username).await
-                    },
-                    move |result| {
-                        Message::VoiceCommandResult(VoiceCommandResult::Connect(
-                            result.map_err(|e| e.to_string())
-                        ))
-                    }
-                )
-            }
-            VoiceCommand::JoinVoiceChannel => {
-                Task::perform(
-                    async move {
-                        let mut client_lock = client.lock().await;
-                        client_lock.join_channel().await
-                    },
-                    move |result| {
-                        Message::VoiceCommandResult(VoiceCommandResult::JoinVoiceChannel(
-                            result.map_err(|e| e.to_string())
-                        ))
-                    }
-                )
-            }
-            VoiceCommand::LeaveVoiceChannel => {
-                Task::perform(
-                    async move {
-                        let mut guard = client.lock().await;
-                        guard.leave_channel().await
-                    },
-                    move |result| {
-                        Message::VoiceCommandResult(VoiceCommandResult::LeaveVoiceChannel(
-                            result.map_err(|e| e.to_string())
-                        ))
-                    }
-                )
-            }
-            VoiceCommand::SendChatMessage(message) => {
-                Task::perform(
-                    async move {
-                        let mut guard = client.lock().await;
-                        guard.send_message(&message).await
-                    },
-                    move |result| {
-                        Message::VoiceCommandResult(VoiceCommandResult::SendChatMessage(
-                            result.map_err(|e| e.to_string())
-                        ))
-                    }
-                )
-            }
+            VoiceCommand::Connect {
+                management_addr,
+                voice_addr,
+                username,
+            } => Task::perform(
+                async move {
+                    let mut guard = client.lock().await;
+                    guard
+                        .connect(&management_addr, &voice_addr, &username)
+                        .await
+                },
+                move |result| {
+                    Message::VoiceCommandResult(VoiceCommandResult::Connect(
+                        result.map_err(|e| e.to_string()),
+                    ))
+                },
+            ),
+            VoiceCommand::JoinVoiceChannel => Task::perform(
+                async move {
+                    let mut client_lock = client.lock().await;
+                    client_lock.join_channel().await
+                },
+                move |result| {
+                    Message::VoiceCommandResult(VoiceCommandResult::JoinVoiceChannel(
+                        result.map_err(|e| e.to_string()),
+                    ))
+                },
+            ),
+            VoiceCommand::LeaveVoiceChannel => Task::perform(
+                async move {
+                    let mut guard = client.lock().await;
+                    guard.leave_channel().await
+                },
+                move |result| {
+                    Message::VoiceCommandResult(VoiceCommandResult::LeaveVoiceChannel(
+                        result.map_err(|e| e.to_string()),
+                    ))
+                },
+            ),
+            VoiceCommand::SendChatMessage(message) => Task::perform(
+                async move {
+                    let mut guard = client.lock().await;
+                    guard.send_message(&message).await
+                },
+                move |result| {
+                    Message::VoiceCommandResult(VoiceCommandResult::SendChatMessage(
+                        result.map_err(|e| e.to_string()),
+                    ))
+                },
+            ),
         }
     }
 

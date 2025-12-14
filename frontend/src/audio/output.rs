@@ -1,7 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Stream, StreamConfig, SampleRate, SampleFormat};
-use tracing::{debug, error, info, warn};
+use cpal::{Device, SampleFormat, SampleRate, Stream, StreamConfig};
 use std::sync::Arc;
+use tracing::{debug, error, info, warn};
 use voiceapp_sdk::VoiceDecoder;
 
 const TARGET_SAMPLE_RATE: u32 = 48000;
@@ -40,13 +40,11 @@ fn find_output_device() -> Result<Device, Box<dyn std::error::Error>> {
     }
 
     if !found_valid {
-        return Err(
-            format!(
-                "Device does not support {} Hz sample rate",
-                TARGET_SAMPLE_RATE
-            )
-            .into(),
-        );
+        return Err(format!(
+            "Device does not support {} Hz sample rate",
+            TARGET_SAMPLE_RATE
+        )
+        .into());
     }
 
     Ok(device)
@@ -54,7 +52,9 @@ fn find_output_device() -> Result<Device, Box<dyn std::error::Error>> {
 
 /// Get output stream config: prefer F32, fall back to any format that supports 48kHz
 /// Returns (StreamConfig, SampleFormat)
-fn get_stream_config(device: &Device) -> Result<(StreamConfig, SampleFormat), Box<dyn std::error::Error>> {
+fn get_stream_config(
+    device: &Device,
+) -> Result<(StreamConfig, SampleFormat), Box<dyn std::error::Error>> {
     let configs: Vec<_> = device.supported_output_configs()?.collect();
 
     // Try to find F32 config at 48kHz first
@@ -64,7 +64,9 @@ fn get_stream_config(device: &Device) -> Result<(StreamConfig, SampleFormat), Bo
             && config.max_sample_rate() >= SampleRate(TARGET_SAMPLE_RATE)
         {
             info!("Selected F32 format for output");
-            let stream_config: StreamConfig = config.with_sample_rate(SampleRate(TARGET_SAMPLE_RATE)).into();
+            let stream_config: StreamConfig = config
+                .with_sample_rate(SampleRate(TARGET_SAMPLE_RATE))
+                .into();
             return Ok((stream_config, SampleFormat::F32));
         }
     }
@@ -76,7 +78,9 @@ fn get_stream_config(device: &Device) -> Result<(StreamConfig, SampleFormat), Bo
         {
             let format = config.sample_format();
             info!("F32 not available, falling back to {:?} format", format);
-            let stream_config: StreamConfig = config.with_sample_rate(SampleRate(TARGET_SAMPLE_RATE)).into();
+            let stream_config: StreamConfig = config
+                .with_sample_rate(SampleRate(TARGET_SAMPLE_RATE))
+                .into();
             return Ok((stream_config, format));
         }
     }
@@ -85,14 +89,16 @@ fn get_stream_config(device: &Device) -> Result<(StreamConfig, SampleFormat), Bo
 }
 
 /// Create output stream for playing back audio from a specific user
-pub fn create_output_stream(decoder: Arc<VoiceDecoder>) -> Result<AudioOutputHandle, Box<dyn std::error::Error>> {
+pub fn create_output_stream(
+    decoder: Arc<VoiceDecoder>,
+) -> Result<AudioOutputHandle, Box<dyn std::error::Error>> {
     debug!("Creating output stream...");
     let device = find_output_device()?;
     let (mut config, format) = get_stream_config(&device)?;
 
     // Set buffer size to 10ms (480 samples at 48kHz) to match NetEQ output frame size
     const BUFFER_SIZE_MS: u32 = 10;
-    let frames_per_buffer = (TARGET_SAMPLE_RATE / 1000) * BUFFER_SIZE_MS;  // 480 samples
+    let frames_per_buffer = (TARGET_SAMPLE_RATE / 1000) * BUFFER_SIZE_MS; // 480 samples
     config.buffer_size = cpal::BufferSize::Fixed(frames_per_buffer);
     config.channels = 1;
 
@@ -159,9 +165,7 @@ pub fn create_output_stream(decoder: Arc<VoiceDecoder>) -> Result<AudioOutputHan
     stream.play()?;
     debug!("Output stream started");
 
-    Ok(AudioOutputHandle {
-        _stream: stream,
-    })
+    Ok(AudioOutputHandle { _stream: stream })
 }
 
 fn fill_output(

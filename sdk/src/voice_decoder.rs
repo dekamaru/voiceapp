@@ -1,5 +1,5 @@
-use neteq::{AudioPacket, NetEq, NetEqConfig, RtpHeader};
 use neteq::codec::OpusDecoder;
+use neteq::{AudioPacket, NetEq, NetEqConfig, RtpHeader};
 use std::sync::{Arc, Mutex};
 use voiceapp_protocol::VoiceData;
 
@@ -36,8 +36,8 @@ impl VoiceDecoder {
             ..Default::default()
         };
 
-        let mut neteq = NetEq::new(neteq_config)
-            .map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))?;
+        let mut neteq =
+            NetEq::new(neteq_config).map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))?;
 
         let decoder = OpusDecoder::new(SAMPLE_RATE, CHANNELS)
             .map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))?;
@@ -66,14 +66,16 @@ impl VoiceDecoder {
         );
 
         let mut neteq = self.neteq.lock().unwrap();
-        neteq.insert_packet(decoder_packet)
+        neteq
+            .insert_packet(decoder_packet)
             .map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))
     }
 
     /// Get decoded audio from NetEQ (called from CPAL callback on-demand)
     pub fn get_audio(&self) -> Result<Vec<f32>, VoiceDecoderError> {
         let mut neteq = self.neteq.lock().unwrap();
-        neteq.get_audio()
+        neteq
+            .get_audio()
             .map(|frame| frame.samples)
             .map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))
     }

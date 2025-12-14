@@ -1,15 +1,14 @@
+use crate::management_server::ManagementServer;
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 use voiceapp_protocol::{
-    parse_packet, PacketId, decode_voice_data, encode_voice_data,
-    encode_voice_auth_response,
-    requests::decode_voice_auth_request
+    decode_voice_data, encode_voice_auth_response, encode_voice_data, parse_packet,
+    requests::decode_voice_auth_request, PacketId,
 };
-use std::collections::HashMap;
-use std::sync::Arc;
-use crate::management_server::ManagementServer;
 
 /// VoiceRelayServer handles UDP voice packet relaying
 /// It depends on ManagementServer for user authentication and state
@@ -79,16 +78,25 @@ impl VoiceRelayServer {
         packet_data: &[u8],
         udp_socket: &Arc<UdpSocket>,
     ) {
-        let user_id = self.authenticated_addrs.read().await.get(&src_addr).copied();
+        let user_id = self
+            .authenticated_addrs
+            .read()
+            .await
+            .get(&src_addr)
+            .copied();
 
         match parse_packet(packet_data) {
             Ok((packet_id, payload)) => {
                 if packet_id == PacketId::VoiceAuthRequest && user_id.is_none() {
                     self.authenticate(src_addr, payload, udp_socket).await;
                 } else if packet_id == PacketId::VoiceData && user_id.is_some() {
-                    self.forward_voice_packet(user_id.unwrap(), payload, udp_socket).await;
+                    self.forward_voice_packet(user_id.unwrap(), payload, udp_socket)
+                        .await;
                 } else {
-                    error!("Received invalid packet id {:?}. User: {:?}", packet_id, user_id);
+                    error!(
+                        "Received invalid packet id {:?}. User: {:?}",
+                        packet_id, user_id
+                    );
                 }
             }
             Err(e) => {
@@ -112,8 +120,11 @@ impl VoiceRelayServer {
                 voice_data.ssrc = sender_user_id;
 
                 if !self.management.is_user_in_voice(sender_user_id).await {
-                    error!("Received voice packet from user which is not in voice!, sender_id={}", sender_user_id);
-                    return
+                    error!(
+                        "Received voice packet from user which is not in voice!, sender_id={}",
+                        sender_user_id
+                    );
+                    return;
                 }
 
                 // Get list of destination addresses
@@ -164,7 +175,10 @@ impl VoiceRelayServer {
                     if let Some(user_id) = user_id_opt {
                         let mut authenticated_addrs = self.authenticated_addrs.write().await;
                         authenticated_addrs.insert(src_addr, user_id);
-                        debug!("Authenticated voice connection from {} (user_id: {})", src_addr, user_id);
+                        debug!(
+                            "Authenticated voice connection from {} (user_id: {})",
+                            src_addr, user_id
+                        );
                     }
                 } else {
                     error!("Invalid token from {}", src_addr);
@@ -175,7 +189,10 @@ impl VoiceRelayServer {
                 if let Err(e) = udp_socket.send_to(&response_data, src_addr).await {
                     error!("Failed to send auth response to {}: {}", src_addr, e);
                 } else {
-                    debug!("Sent auth response (success={}) to {}", token_valid, src_addr);
+                    debug!(
+                        "Sent auth response (success={}) to {}",
+                        token_valid, src_addr
+                    );
                 }
             }
             Err(e) => {
@@ -187,11 +204,17 @@ impl VoiceRelayServer {
     /// Handle user disconnect: remove all authenticated addresses for this user
     async fn handle_voice_disconnect(&self, user_id: u64) {
         let mut authenticated_addrs = self.authenticated_addrs.write().await;
-        let removed_count = authenticated_addrs.values().filter(|&&uid| uid == user_id).count();
+        let removed_count = authenticated_addrs
+            .values()
+            .filter(|&&uid| uid == user_id)
+            .count();
         authenticated_addrs.retain(|_, &mut uid| uid != user_id);
 
         if removed_count > 0 {
-            debug!("Cleaned up {} UDP voice session(s) for user_id: {}", removed_count, user_id);
+            debug!(
+                "Cleaned up {} UDP voice session(s) for user_id: {}",
+                removed_count, user_id
+            );
         }
     }
 }

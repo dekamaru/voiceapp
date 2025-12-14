@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{error, info};
-use voiceapp_sdk::{VoiceClient, VoiceInputPipeline, VoiceInputPipelineConfig, voiceapp_protocol};
+use voiceapp_sdk::{voiceapp_protocol, VoiceClient, VoiceInputPipeline, VoiceInputPipelineConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -58,18 +58,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Read all samples
-    let samples: Vec<i16> = reader.into_samples::<i16>()
+    let samples: Vec<i16> = reader
+        .into_samples::<i16>()
         .collect::<Result<Vec<_>, _>>()?;
 
     info!(
         "WAV file loaded: {} Hz, {} channels, {} bits/sample, {} samples",
-        spec.sample_rate, spec.channels, spec.bits_per_sample, samples.len()
+        spec.sample_rate,
+        spec.channels,
+        spec.bits_per_sample,
+        samples.len()
     );
 
     // Connect to voice server
     info!("Connecting to voice servers...");
     let mut client = VoiceClient::new()?;
-    client.connect(&server_addr, &voice_server_addr, "music_bot").await?;
+    client
+        .connect(&server_addr, &voice_server_addr, "music_bot")
+        .await?;
     client.join_channel().await?;
     info!("Connected!");
 
@@ -106,7 +112,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (frame_idx, chunk) in samples.chunks(FRAME_SIZE).enumerate() {
         // Calculate exact time this frame should be sent
-        let frame_send_time = stream_start + Duration::from_millis(frame_idx as u64 * FRAME_DURATION_MS);
+        let frame_send_time =
+            stream_start + Duration::from_millis(frame_idx as u64 * FRAME_DURATION_MS);
 
         // Sleep until the exact time this frame should be sent
         let now = Instant::now();

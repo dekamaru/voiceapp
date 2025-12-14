@@ -1,12 +1,14 @@
-use iced::{border, Background, Border, Color, Element, Font, Length, Padding, Task};
+use crate::application::{Message, Page, VoiceCommand, VoiceCommandResult};
+use crate::colors::{
+    color_error, text_primary, text_secondary, text_selection, DARK_CONTAINER_BACKGROUND,
+};
+use crate::widgets::Widgets;
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Family, Weight};
-use iced::widget::{button, container, row, space, stack, text, text_input, Space};
 use iced::widget::container::Style;
+use iced::widget::{button, container, row, space, stack, text, text_input, Space};
+use iced::{border, Background, Border, Color, Element, Font, Length, Padding, Task};
 use tracing::debug;
-use crate::application::{Message, Page, VoiceCommand, VoiceCommandResult};
-use crate::colors::{color_error, text_primary, text_secondary, text_selection, DARK_CONTAINER_BACKGROUND};
-use crate::widgets::Widgets;
 
 #[derive(Default)]
 pub struct LoginPage {
@@ -20,7 +22,7 @@ pub struct LoginPage {
 pub enum LoginPageMessage {
     VoiceUrlChanged(String),
     UsernameChanged(String),
-    LoginSubmitted
+    LoginSubmitted,
 }
 
 impl Into<Message> for LoginPageMessage {
@@ -54,7 +56,12 @@ impl LoginPage {
         // FIXME: "Tab" support between inputs
         let form = container(
             iced::widget::column!(
-                self.input("Voice server IP", &mut self.voice_url.clone(), LoginPageMessage::VoiceUrlChanged, LoginPageMessage::LoginSubmitted),
+                self.input(
+                    "Voice server IP",
+                    &mut self.voice_url.clone(),
+                    LoginPageMessage::VoiceUrlChanged,
+                    LoginPageMessage::LoginSubmitted
+                ),
                 Widgets::input_with_submit(
                     "Username",
                     &mut self.username.clone(),
@@ -64,19 +71,20 @@ impl LoginPage {
                     262,
                     48
                 )
-            ).spacing(8)
+            )
+            .spacing(8),
         );
 
         let login_form = iced::widget::column!(
-          space::vertical(),
-          text!("Voiceapp").size(32).font(bold),
-          form,
-          space::vertical(),
-      )
-            .spacing(32)
-            .align_x(Horizontal::Center)
-            .width(Length::Fill)
-            .height(Length::Fill);
+            space::vertical(),
+            text!("Voiceapp").size(32).font(bold),
+            form,
+            space::vertical(),
+        )
+        .spacing(32)
+        .align_x(Horizontal::Center)
+        .width(Length::Fill)
+        .height(Length::Fill);
 
         let error_area = container(text(self.login_error.clone()).color(color_error()))
             .align_y(Vertical::Bottom)
@@ -85,34 +93,47 @@ impl LoginPage {
             .height(Length::Fill)
             .padding(32);
 
-        stack!(error_area, login_form).width(Length::Fill).height(Length::Fill)
+        stack!(error_area, login_form)
+            .width(Length::Fill)
+            .height(Length::Fill)
     }
 
-    fn input(&self, placeholder: &str, value: &mut String, message: fn(String) -> LoginPageMessage, submit_message: LoginPageMessage) -> iced::widget::Container<Message> {
-        let container_style = |_theme: &iced::Theme| {
-            Style {
-                background: Some(Background::Color(DARK_CONTAINER_BACKGROUND)),
-                border: border::rounded(24),
-                ..Style::default()
-            }
+    fn input(
+        &self,
+        placeholder: &str,
+        value: &mut String,
+        message: fn(String) -> LoginPageMessage,
+        submit_message: LoginPageMessage,
+    ) -> iced::widget::Container<Message> {
+        let container_style = |_theme: &iced::Theme| Style {
+            background: Some(Background::Color(DARK_CONTAINER_BACKGROUND)),
+            border: border::rounded(24),
+            ..Style::default()
         };
 
         container(
             text_input(placeholder, value)
-                .on_input(move |t| { message(t).into() })
+                .on_input(move |t| message(t).into())
                 .on_submit(submit_message.into())
                 .padding(0)
-                .style(|_theme, _status| {
-                    text_input::Style {
-                        background: Background::Color(Color::TRANSPARENT),
-                        border: Border::default(),
-                        icon: Color::TRANSPARENT,
-                        placeholder: text_secondary(),
-                        value: text_primary(),
-                        selection: text_selection()
-                    }
+                .style(|_theme, _status| text_input::Style {
+                    background: Background::Color(Color::TRANSPARENT),
+                    border: Border::default(),
+                    icon: Color::TRANSPARENT,
+                    placeholder: text_secondary(),
+                    value: text_primary(),
+                    selection: text_selection(),
                 }),
-        ).width(262).height(48).padding(Padding {top: 13.0, right: 16.0, bottom: 12.0, left: 16.0}).style(container_style)
+        )
+        .width(262)
+        .height(48)
+        .padding(Padding {
+            top: 13.0,
+            right: 16.0,
+            bottom: 12.0,
+            left: 16.0,
+        })
+        .style(container_style)
     }
 }
 
@@ -140,25 +161,23 @@ impl Page for LoginPage {
                     LoginPageMessage::LoginSubmitted => {
                         if self.form_filled {
                             // TODO: inputs should be blocked (buttons as well)
-                            return Task::done(
-                                Message::ExecuteVoiceCommand(VoiceCommand::Connect {
+                            return Task::done(Message::ExecuteVoiceCommand(
+                                VoiceCommand::Connect {
                                     management_addr: format!("{}:9001", self.voice_url),
                                     voice_addr: format!("{}:9002", self.voice_url),
                                     username: self.username.clone(),
-                                })
-                            );
+                                },
+                            ));
                         }
-                    },
-                }
-            }
-            Message::VoiceCommandResult(VoiceCommandResult::Connect(result)) => {
-                match result {
-                    Err(err) => {
-                        self.login_error = err;
                     }
-                    _ => {}
                 }
             }
+            Message::VoiceCommandResult(VoiceCommandResult::Connect(result)) => match result {
+                Err(err) => {
+                    self.login_error = err;
+                }
+                _ => {}
+            },
             _ => {
                 debug!("Ignored message in login page: {:?}", message);
             }

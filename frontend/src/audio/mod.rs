@@ -1,5 +1,5 @@
+mod audio_manager;
 mod input;
 mod output;
-mod audio_manager;
 
 pub use audio_manager::AudioManager;

@@ -1,9 +1,9 @@
-use async_channel::{Sender, Receiver, unbounded};
+use async_channel::{unbounded, Receiver, Sender};
 use rubato::{FftFixedIn, Resampler};
 use tracing::{error, info};
 
-use voiceapp_protocol::VoiceData;
 use crate::voice_encoder::{VoiceEncoder, OPUS_FRAME_SAMPLES};
+use voiceapp_protocol::VoiceData;
 
 /// Configuration for VoiceInputPipeline
 pub struct VoiceInputPipelineConfig {
@@ -89,7 +89,10 @@ impl VoiceInputPipeline {
             Vec::new()
         };
 
-        info!("Voice input pipeline started with sample_rate={}", config.sample_rate);
+        info!(
+            "Voice input pipeline started with sample_rate={}",
+            config.sample_rate
+        );
 
         loop {
             match input_rx.recv().await {
@@ -110,8 +113,9 @@ impl VoiceInputPipeline {
                                     None,
                                 ) {
                                     Ok((_, resampled_size)) => {
-                                        encode_buffer
-                                            .extend_from_slice(&resample_out_buffer[0][0..resampled_size]);
+                                        encode_buffer.extend_from_slice(
+                                            &resample_out_buffer[0][0..resampled_size],
+                                        );
                                     }
                                     Err(e) => {
                                         error!("Resampling error: {}", e);
