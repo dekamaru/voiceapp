@@ -92,23 +92,17 @@ fn get_stream_config(
 pub fn create_output_stream(
     decoder: Arc<VoiceDecoder>,
 ) -> Result<AudioOutputHandle, Box<dyn std::error::Error>> {
-    debug!("Creating output stream...");
     let device = find_output_device()?;
-    let (mut config, format) = get_stream_config(&device)?;
-
-    // Set buffer size to 10ms (480 samples at 48kHz) to match NetEQ output frame size
-    const BUFFER_SIZE_MS: u32 = 10;
-    let frames_per_buffer = (TARGET_SAMPLE_RATE / 1000) * BUFFER_SIZE_MS; // 480 samples
-    config.buffer_size = cpal::BufferSize::Fixed(frames_per_buffer);
-    config.channels = 1;
+    let (config, format) = get_stream_config(&device)?;
 
     info!(
-        "Output stream config: {} channels, {} Hz, format: {:?}, buffer: {} samples ({} ms)",
-        config.channels, config.sample_rate.0, format, frames_per_buffer, BUFFER_SIZE_MS
+        "Output stream config: {} channels, {} Hz, format: {:?}",
+        config.channels, config.sample_rate.0, format
     );
 
     let volume = 1.0f32;
     let err_fn = |e| error!("Stream error: {}", e);
+    let channels = config.channels as usize;
 
     // Build stream matching the format
     let stream = match format {
@@ -118,7 +112,15 @@ pub fn create_output_stream(
             device.build_output_stream(
                 &config,
                 move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    fill_output(output, &decoder_clone, &mut leftover, volume);
+                    // Convert mono to stereo/multi-channel
+                    let frame_count = output.len() / channels;
+                    let mut mono_buffer = vec![0.0f32; frame_count];
+                    fill_output(&mut mono_buffer, &decoder_clone, &mut leftover, volume);
+                    for i in 0..frame_count {
+                        for ch in 0..channels {
+                            output[i * channels + ch] = mono_buffer[i];
+                        }
+                    }
                 },
                 err_fn,
                 None,
@@ -130,10 +132,15 @@ pub fn create_output_stream(
             device.build_output_stream(
                 &config,
                 move |output: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    let mut tmp = vec![0.0f32; output.len()];
-                    fill_output(&mut tmp, &decoder_clone, &mut leftover, volume);
-                    for (o, &v) in output.iter_mut().zip(tmp.iter()) {
-                        *o = (v.clamp(-1.0, 1.0) * 32767.0) as i16;
+                    // Convert mono to stereo/multi-channel
+                    let frame_count = output.len() / channels;
+                    let mut mono_buffer = vec![0.0f32; frame_count];
+                    fill_output(&mut mono_buffer, &decoder_clone, &mut leftover, volume);
+                    for i in 0..frame_count {
+                        let sample = (mono_buffer[i].clamp(-1.0, 1.0) * 32767.0) as i16;
+                        for ch in 0..channels {
+                            output[i * channels + ch] = sample;
+                        }
                     }
                 },
                 err_fn,
@@ -146,10 +153,15 @@ pub fn create_output_stream(
             device.build_output_stream(
                 &config,
                 move |output: &mut [u16], _: &cpal::OutputCallbackInfo| {
-                    let mut tmp = vec![0.0f32; output.len()];
-                    fill_output(&mut tmp, &decoder_clone, &mut leftover, volume);
-                    for (o, &v) in output.iter_mut().zip(tmp.iter()) {
-                        *o = ((v.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16;
+                    // Convert mono to stereo/multi-channel
+                    let frame_count = output.len() / channels;
+                    let mut mono_buffer = vec![0.0f32; frame_count];
+                    fill_output(&mut mono_buffer, &decoder_clone, &mut leftover, volume);
+                    for i in 0..frame_count {
+                        let sample = ((mono_buffer[i].clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16;
+                        for ch in 0..channels {
+                            output[i * channels + ch] = sample;
+                        }
                     }
                 },
                 err_fn,

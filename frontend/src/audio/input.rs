@@ -87,13 +87,13 @@ fn stereo_to_mono(stereo: &[f32], channels: u16) -> Vec<f32> {
 /// Create input stream that captures audio and sends frames through channel
 /// Returns (stream, actual_sample_rate, receiver)
 pub fn create_input_stream(
-) -> Result<(Stream, u32, mpsc::Receiver<AudioFrame>), Box<dyn std::error::Error>> {
+) -> Result<(Stream, u32, mpsc::UnboundedReceiver<AudioFrame>), Box<dyn std::error::Error>> {
     let device = find_input_device()?;
     let (config, format) = get_stream_config(&device)?;
 
     let sample_rate = config.sample_rate.0;
 
-    let (tx, rx) = mpsc::channel::<AudioFrame>(100);
+    let (tx, rx) = mpsc::unbounded_channel();
 
     let channels = config.channels;
 
@@ -103,7 +103,7 @@ pub fn create_input_stream(
             &config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 let mono_samples = stereo_to_mono(data, channels);
-                let _ = tx.try_send(mono_samples);
+                let _ = tx.send(mono_samples);
             },
             move |err| {
                 error!("Input stream error: {}", err);
@@ -117,8 +117,7 @@ pub fn create_input_stream(
                     // Convert i16 to f32 in [-1.0, 1.0] range
                     let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
                     let mono_samples = stereo_to_mono(&f32_data, channels);
-                    // Use try_send() to NEVER block the audio callback
-                    let _ = tx.try_send(mono_samples);
+                    let _ = tx.send(mono_samples);
                 },
                 move |err| {
                     error!("Input stream error: {}", err);
@@ -135,7 +134,7 @@ pub fn create_input_stream(
                         data.iter().map(|&s| (s as f32 / 32768.0) - 1.0).collect();
                     let mono_samples = stereo_to_mono(&f32_data, channels);
                     // Use try_send() to NEVER block the audio callback
-                    let _ = tx.try_send(mono_samples);
+                    let _ = tx.send(mono_samples);
                 },
                 move |err| {
                     error!("Input stream error: {}", err);
