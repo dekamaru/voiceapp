@@ -224,16 +224,36 @@ pub fn list_output_devices() -> Result<(Vec<String>, usize), Box<dyn std::error:
         return Err("No output devices found".into());
     }
 
-    // Get device names
-    let device_names: Vec<String> = devices
-        .iter()
-        .filter_map(|device| device.name().ok())
-        .collect();
+    // Get device names and log supported configs
+    let mut device_names = Vec::new();
+    for device in &devices {
+        if let Ok(name) = device.name() {
+            info!("Output device: {}", name);
+
+            // Log all supported configs for this device
+            if let Ok(configs) = device.supported_output_configs() {
+                for config in configs {
+                    info!(
+                        "  Config: {} channels, {}-{} Hz, {:?}",
+                        config.channels(),
+                        config.min_sample_rate().0,
+                        config.max_sample_rate().0,
+                        config.sample_format()
+                    );
+                }
+            } else {
+                warn!("  Failed to query supported configs");
+            }
+
+            device_names.push(name);
+        }
+    }
 
     // Find default device index
     let default_device = host.default_output_device();
     let default_index = if let Some(default_dev) = default_device {
         if let Ok(default_name) = default_dev.name() {
+            info!("Default output device: {}", default_name);
             device_names
                 .iter()
                 .position(|name| name == &default_name)
