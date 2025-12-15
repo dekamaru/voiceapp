@@ -211,3 +211,39 @@ fn fill_output(
         idx += n;
     }
 }
+
+/// List all available output devices
+/// Returns (device_names, default_device_index)
+pub fn list_output_devices() -> Result<(Vec<String>, usize), Box<dyn std::error::Error>> {
+    let host = cpal::default_host();
+
+    // Get all output devices
+    let devices: Vec<Device> = host.output_devices()?.collect();
+
+    if devices.is_empty() {
+        return Err("No output devices found".into());
+    }
+
+    // Get device names
+    let device_names: Vec<String> = devices
+        .iter()
+        .filter_map(|device| device.name().ok())
+        .collect();
+
+    // Find default device index
+    let default_device = host.default_output_device();
+    let default_index = if let Some(default_dev) = default_device {
+        if let Ok(default_name) = default_dev.name() {
+            device_names
+                .iter()
+                .position(|name| name == &default_name)
+                .unwrap_or(0)
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    Ok((device_names, default_index))
+}

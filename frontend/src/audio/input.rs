@@ -15,8 +15,6 @@ fn find_input_device() -> Result<Device, Box<dyn std::error::Error>> {
     let host = cpal::default_host();
     let device = host.default_input_device().ok_or("No input device found")?;
 
-    info!("Selected input device: {}", device.name()?);
-
     Ok(device)
 }
 
@@ -32,7 +30,6 @@ fn get_stream_config(
         if config.sample_format() == SampleFormat::F32
             && config.max_sample_rate() >= SampleRate(TARGET_SAMPLE_RATE)
         {
-            info!("Selected F32 format");
             let stream_config: StreamConfig = config
                 .with_sample_rate(SampleRate(TARGET_SAMPLE_RATE))
                 .into();
@@ -96,11 +93,6 @@ pub fn create_input_stream(
 
     let sample_rate = config.sample_rate.0;
 
-    info!(
-        "Input stream config: {} channels, {} Hz, format: {:?}",
-        config.channels, config.sample_rate.0, format
-    );
-
     let (tx, rx) = mpsc::channel::<AudioFrame>(100);
 
     let channels = config.channels;
@@ -158,7 +150,6 @@ pub fn create_input_stream(
 
     // Start the stream
     stream.play()?;
-    debug!("Input stream started");
 
     Ok((stream, sample_rate, rx))
 }
@@ -195,14 +186,6 @@ pub fn list_input_devices() -> Result<(Vec<String>, usize), Box<dyn std::error::
     } else {
         0
     };
-
-    info!(
-        "Found {} input devices, default: {}",
-        device_names.len(),
-        device_names
-            .get(default_index)
-            .unwrap_or(&"unknown".to_string())
-    );
 
     Ok((device_names, default_index))
 }

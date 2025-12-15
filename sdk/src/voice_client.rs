@@ -142,7 +142,7 @@ impl VoiceClient {
             .await
             .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
 
-        info!("[Management] Connected to {}", management_server_addr);
+        info!("[Management server] Connected to {}", management_server_addr);
 
         // Create UDP socket (bind to any available port)
         let udp_socket = UdpSocket::bind("0.0.0.0:0")
@@ -154,7 +154,7 @@ impl VoiceClient {
             VoiceClientError::ConnectionFailed(format!("UDP connect failed: {}", e))
         })?;
 
-        info!("[Voice] Connected to {}", voice_server_addr);
+        info!("[Voice server] Connected to {}", voice_server_addr);
 
         // Spawn background tasks
         self.spawn_tcp_handler(
@@ -209,7 +209,7 @@ impl VoiceClient {
             })
             .await;
 
-        info!("[Management] Authenticated, user_id={}", response.id);
+        info!("[Management server] Authenticated, user_id={}", response.id);
 
         // UDP authentication (with retry logic: 3 attempts, 5s timeout each)
         let max_retries = 3;
@@ -253,7 +253,7 @@ impl VoiceClient {
 
             match timeout_result {
                 Ok(Ok(())) => {
-                    info!("[Voice] Authenticated successfully");
+                    info!("[Voice server] Authenticated successfully");
                     return Ok(());
                 }
                 Ok(Err(e)) => return Err(e),

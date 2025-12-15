@@ -1,5 +1,5 @@
 use crate::application::{Message, Page};
-use crate::audio::{create_input_stream, list_input_devices};
+use crate::audio::{create_input_stream, list_input_devices, list_output_devices};
 use crate::colors::{debug_red, text_primary, DARK_BACKGROUND, DARK_CONTAINER_BACKGROUND};
 use crate::icons::Icons;
 use crate::pages::room::RoomPageMessage;
@@ -23,21 +23,25 @@ use tokio::sync::mpsc;
 pub struct SettingsPage {
     // Add settings state fields here as needed
     radio_hover_indexes: HashMap<String, usize>,
+
+    // Input
     selected_input_device: usize,
     input_sensitivity: u8,
     input_device_names: Vec<String>,
-
-    // Audio input stream and channel
     input_stream: Option<Stream>,
     samples_tx: mpsc::Sender<Vec<f32>>,
-
-    // Voice level meter (0.0 to 1.0, representing -100dB to 0dB)
     voice_level: f32,
+
+    // Output
+    selected_output_device: usize,
+    output_device_names: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub enum SettingsPageMessage {
     SelectInputDevice(usize),
+    SelectOutputDevice(usize),
+
     InputSensitivityChanged(u8),
 
     RadioHoverEnter(String, usize),
@@ -59,19 +63,27 @@ impl SettingsPage {
         let (samples_tx, _samples_rx) = mpsc::channel(100);
 
         // Get available input devices
-        let (device_names, default_index) = list_input_devices().unwrap_or_else(|e| {
+        let (input_device_names, input_default_index) = list_input_devices().unwrap_or_else(|e| {
             tracing::warn!("Failed to list input devices: {}", e);
+            (vec!["No devices available".to_string()], 0)
+        });
+
+        // Get available output devices
+        let (output_device_names, output_default_index) = list_output_devices().unwrap_or_else(|e| {
+            tracing::warn!("Failed to list output devices: {}", e);
             (vec!["No devices available".to_string()], 0)
         });
 
         Self {
             radio_hover_indexes: HashMap::new(),
-            selected_input_device: default_index,
+            selected_input_device: input_default_index,
             input_sensitivity: 30,
-            input_device_names: device_names,
+            input_device_names,
             input_stream: None,
             samples_tx,
             voice_level: 0.0,
+            selected_output_device: output_default_index,
+            output_device_names,
         }
     }
 
@@ -85,7 +97,6 @@ impl SettingsPage {
         // Create the audio input stream
         match create_input_stream() {
             Ok((stream, _sample_rate, mut stream_rx)) => {
-                tracing::info!("Input stream created successfully");
                 self.input_stream = Some(stream);
 
                 // Task to rebroadcast from stream_rx to persistent samples_tx
@@ -325,6 +336,19 @@ impl SettingsPage {
         )
         .spacing(12);
 
+        let output_device_select = self.input_radio(
+            &self.output_device_names,
+            self.selected_output_device,
+            "output_device",
+            SettingsPageMessage::SelectOutputDevice,
+        );
+
+        let output_device = column!(
+            text("Output device").font(bold).size(12),
+            output_device_select
+        )
+            .spacing(12);
+
         let progress_bar = container(progress_bar(0.0..=1.0, self.voice_level).girth(4).style(|_theme: &Theme| {
             progress_bar::Style {
                 background: Background::Color(Color::TRANSPARENT),
@@ -359,7 +383,7 @@ impl SettingsPage {
         )
         .spacing(12);
 
-        let settings_container = column!(input_device, input_device_sensitivity).spacing(24);
+        let settings_container = column!(input_device, input_device_sensitivity, output_device).spacing(24);
 
         container(column!(header, settings_container).spacing(32)).padding(Padding {
             top: 32.0,
@@ -389,6 +413,9 @@ impl Page for SettingsPage {
                         // Recreate input stream with new device
                         self.stop_input_stream();
                         return self.start_input_stream();
+                    }
+                    SettingsPageMessage::SelectOutputDevice(index) => {
+                        self.selected_output_device = index;
                     }
                     SettingsPageMessage::RadioHoverEnter(group, index) => {
                         self.radio_hover_indexes.insert(group, index);
