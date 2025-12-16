@@ -6,6 +6,7 @@ use tracing_subscriber;
 mod application;
 mod audio;
 mod colors;
+mod config;
 mod icons;
 mod pages;
 mod widgets;

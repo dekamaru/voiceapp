@@ -8,6 +8,7 @@ use iced::font::{Family, Weight};
 use iced::widget::container::Style;
 use iced::widget::{button, container, row, space, stack, text, text_input, Space};
 use iced::{border, Background, Border, Color, Element, Font, Length, Padding, Task};
+use std::sync::{Arc, RwLock};
 use tracing::debug;
 
 #[derive(Default)]
@@ -32,14 +33,18 @@ impl Into<Message> for LoginPageMessage {
 }
 
 impl LoginPage {
-    pub fn new() -> Self {
-        Self {
-            // TODO: remove debug!
-            voice_url: "127.0.0.1".to_string(),
-            username: "test_user".to_string(),
-            form_filled: true,
-            ..Self::default()
-        }
+    pub fn new(config: Arc<RwLock<crate::config::AppConfig>>) -> Self {
+        let config = config.read().unwrap();
+
+        let mut page = Self {
+            voice_url: config.server.address.clone(),
+            username: config.server.username.clone(),
+            form_filled: false,
+            login_error: "".to_string(),
+        };
+
+        page.form_filled = page.is_form_filled();
+        page
     }
 
     fn is_form_filled(&self) -> bool {

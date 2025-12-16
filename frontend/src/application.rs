@@ -4,9 +4,10 @@ use crate::pages::room::{RoomPage, RoomPageMessage};
 use crate::pages::settings::SettingsPageMessage;
 use async_channel::Receiver;
 use iced::Task;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 use voiceapp_sdk::{VoiceClient, VoiceClientEvent};
+use crate::config::AppConfig;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -54,20 +55,24 @@ pub struct Application {
     voice_client: Arc<Mutex<VoiceClient>>,
     events_rx: Receiver<VoiceClientEvent>,
     audio_manager: AudioManager,
+    config: Arc<RwLock<AppConfig>>,
 }
 
 impl Application {
     pub fn new() -> (Self, Task<Message>) {
+        let config = Arc::new(RwLock::new(AppConfig::load().unwrap()));
+
         let voice_client = VoiceClient::new().expect("failed to init voice client");
         let audio_manager = AudioManager::new(voice_client.get_udp_send_tx());
         let events_rx = voice_client.event_stream();
 
         (
             Self {
-                page: Box::new(LoginPage::new()),
+                page: Box::new(LoginPage::new(config.clone())),
                 voice_client: Arc::new(Mutex::new(voice_client)),
                 events_rx,
                 audio_manager,
+                config,
             },
             Task::none(),
         )
