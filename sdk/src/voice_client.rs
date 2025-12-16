@@ -90,8 +90,9 @@ impl VoiceClient {
         let (event_tx, event_rx) = unbounded();
 
         // Create decoder
+        // TODO: wrong, it should not be hardcoded
         let decoder = Arc::new(
-            VoiceDecoder::new().map_err(|e| VoiceClientError::SystemError(e.to_string()))?,
+            VoiceDecoder::new(48000).map_err(|e| VoiceClientError::SystemError(e.to_string()))?,  // Default to 48kHz
         );
 
         // Create UDP channels

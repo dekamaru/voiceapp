@@ -11,7 +11,7 @@ use crate::audio::output::{create_output_stream, AudioOutputHandle};
 /// Audio manager that handles recording and playback lifecycle
 pub struct AudioManager {
     voice_pipeline: Arc<Mutex<Option<VoiceInputPipeline>>>,
-    decoder: Arc<VoiceDecoder>,
+    decoder: Arc<Mutex<Option<Arc<VoiceDecoder>>>>,
     input_stream: Arc<Mutex<Option<Stream>>>,
     input_receiver_task: Arc<Mutex<Option<JoinHandle<()>>>>,
     pipeline_forward_task: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -21,11 +21,11 @@ pub struct AudioManager {
 }
 
 impl AudioManager {
-    /// Create a new AudioManager with voice decoder and UDP send channel
-    pub fn new(decoder: Arc<VoiceDecoder>, udp_send_tx: Sender<Vec<u8>>) -> Self {
+    /// Create a new AudioManager with UDP send channel
+    pub fn new(udp_send_tx: Sender<Vec<u8>>) -> Self {
         AudioManager {
             voice_pipeline: Arc::new(Mutex::new(None)),
-            decoder,
+            decoder: Arc::new(Mutex::new(None)),
             input_stream: Arc::new(Mutex::new(None)),
             input_receiver_task: Arc::new(Mutex::new(None)),
             pipeline_forward_task: Arc::new(Mutex::new(None)),
@@ -116,13 +116,31 @@ impl AudioManager {
     pub fn start_playback(&self) -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting audio playback");
 
-        // Create the output stream with decoder
-        let output_handle = create_output_stream(self.decoder.clone())?;
+        // Detect output device sample rate
+        use cpal::traits::{DeviceTrait, HostTrait};
+        let host = cpal::default_host();
+        let device = host.default_output_device()
+            .ok_or("No output device found")?;
+        let default_config = device.default_output_config()?;
+        let sample_rate = default_config.sample_rate().0;
+
+        info!("Output device sample rate: {} Hz", sample_rate);
+
+        // Create decoder with detected sample rate
+        let decoder = VoiceDecoder::new(sample_rate)?;
+        let decoder = Arc::new(decoder);
+
+        // Store decoder for later use (receiving packets)
+        *self.decoder.lock().unwrap() = Some(decoder.clone());
+
+        // Create the output stream
+        let (output_handle, detected_rate) = create_output_stream(decoder)?;
+
+        info!("Audio playback started at {} Hz", detected_rate);
 
         // Store the output handle to keep the stream alive
         *self.output_handle.lock().unwrap() = Some(output_handle);
 
-        info!("Audio playback started");
         Ok(())
     }
 
@@ -142,7 +160,10 @@ impl AudioManager {
             }
         }
 
-        self.decoder.flush();
+        // Flush decoder buffer if it exists
+        if let Some(decoder) = self.decoder.lock().unwrap().as_ref() {
+            decoder.flush();
+        }
 
         info!("Audio playback stopped");
     }

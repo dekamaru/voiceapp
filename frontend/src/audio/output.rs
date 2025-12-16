@@ -4,14 +4,12 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 use voiceapp_sdk::VoiceDecoder;
 
-const TARGET_SAMPLE_RATE: u32 = 48000;
-
 /// Handle to manage audio output stream for a single user
 pub struct AudioOutputHandle {
     _stream: Stream, // kept alive to maintain audio stream
 }
 
-/// Find and validate output device
+/// Find output device
 fn find_output_device() -> Result<Device, Box<dyn std::error::Error>> {
     let host = cpal::default_host();
     let device = host
@@ -20,17 +18,13 @@ fn find_output_device() -> Result<Device, Box<dyn std::error::Error>> {
 
     info!("Selected output device: {}", device.name()?);
 
-    // Check supported configs
-    let configs = device.supported_output_configs()?;
-    let mut found_valid = false;
-
-    for config in configs {
-        if config.min_sample_rate() <= SampleRate(TARGET_SAMPLE_RATE)
-            && config.max_sample_rate() >= SampleRate(TARGET_SAMPLE_RATE)
-        {
-            found_valid = true;
+    // Log supported configs for debugging
+    #[cfg(debug_assertions)]
+    {
+        let configs = device.supported_output_configs()?;
+        for config in configs {
             debug!(
-                "Found config: {} channels, {}-{} Hz, {:?}",
+                "Supported: {} ch, {}-{} Hz, {:?}",
                 config.channels(),
                 config.min_sample_rate().0,
                 config.max_sample_rate().0,
@@ -39,65 +33,57 @@ fn find_output_device() -> Result<Device, Box<dyn std::error::Error>> {
         }
     }
 
-    if !found_valid {
-        return Err(format!(
-            "Device does not support {} Hz sample rate",
-            TARGET_SAMPLE_RATE
-        )
-        .into());
-    }
-
     Ok(device)
 }
 
-/// Get output stream config: prefer F32, fall back to any format that supports 48kHz
+/// Get output stream config using device's native sample rate
 /// Returns (StreamConfig, SampleFormat)
 fn get_stream_config(
     device: &Device,
 ) -> Result<(StreamConfig, SampleFormat), Box<dyn std::error::Error>> {
+    // Get device's default config
+    let default_config = device.default_output_config()?;
+    let sample_rate = default_config.sample_rate().0;
+
+    info!(
+        "Using device default: {} Hz, {} channels, {:?}",
+        sample_rate,
+        default_config.channels(),
+        default_config.sample_format()
+    );
+
+    // Try to use F32 format at device's native rate
     let configs: Vec<_> = device.supported_output_configs()?.collect();
 
-    // Try to find F32 config at 48kHz first
     for config in &configs {
         if config.sample_format() == SampleFormat::F32
-            && config.min_sample_rate() <= SampleRate(TARGET_SAMPLE_RATE)
-            && config.max_sample_rate() >= SampleRate(TARGET_SAMPLE_RATE)
+            && config.min_sample_rate() <= SampleRate(sample_rate)
+            && config.max_sample_rate() >= SampleRate(sample_rate)
         {
-            info!("Selected F32 format for output");
             let stream_config: StreamConfig = config
-                .with_sample_rate(SampleRate(TARGET_SAMPLE_RATE))
+                .with_sample_rate(SampleRate(sample_rate))
                 .into();
             return Ok((stream_config, SampleFormat::F32));
         }
     }
 
-    // Fall back to any other format at 48kHz
-    for config in &configs {
-        if config.min_sample_rate() <= SampleRate(TARGET_SAMPLE_RATE)
-            && config.max_sample_rate() >= SampleRate(TARGET_SAMPLE_RATE)
-        {
-            let format = config.sample_format();
-            info!("F32 not available, falling back to {:?} format", format);
-            let stream_config: StreamConfig = config
-                .with_sample_rate(SampleRate(TARGET_SAMPLE_RATE))
-                .into();
-            return Ok((stream_config, format));
-        }
-    }
-
-    Err("Device does not support 48kHz sample rate".into())
+    // Fall back to default format
+    let format = default_config.sample_format();
+    Ok((default_config.into(), format))
 }
 
 /// Create output stream for playing back audio from a specific user
+/// Returns (AudioOutputHandle, sample_rate)
 pub fn create_output_stream(
     decoder: Arc<VoiceDecoder>,
-) -> Result<AudioOutputHandle, Box<dyn std::error::Error>> {
+) -> Result<(AudioOutputHandle, u32), Box<dyn std::error::Error>> {
     let device = find_output_device()?;
     let (config, format) = get_stream_config(&device)?;
+    let sample_rate = config.sample_rate.0;
 
     info!(
         "Output stream config: {} channels, {} Hz, format: {:?}",
-        config.channels, config.sample_rate.0, format
+        config.channels, sample_rate, format
     );
 
     let volume = 1.0f32;
@@ -177,7 +163,7 @@ pub fn create_output_stream(
     stream.play()?;
     debug!("Output stream started");
 
-    Ok(AudioOutputHandle { _stream: stream })
+    Ok((AudioOutputHandle { _stream: stream }, sample_rate))
 }
 
 fn fill_output(

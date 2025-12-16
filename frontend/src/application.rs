@@ -59,8 +59,7 @@ pub struct Application {
 impl Application {
     pub fn new() -> (Self, Task<Message>) {
         let voice_client = VoiceClient::new().expect("failed to init voice client");
-        let audio_manager =
-            AudioManager::new(voice_client.get_decoder(), voice_client.get_udp_send_tx());
+        let audio_manager = AudioManager::new(voice_client.get_udp_send_tx());
         let events_rx = voice_client.event_stream();
 
         (

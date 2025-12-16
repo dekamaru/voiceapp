@@ -1,7 +1,6 @@
 use async_channel::{unbounded, Receiver, Sender};
 use rubato::{FftFixedIn, Resampler};
-use tracing::{error, info};
-use tracing::log::warn;
+use tracing::{error, info, warn};
 use crate::voice_encoder::{VoiceEncoder, OPUS_FRAME_SAMPLES};
 use voiceapp_protocol::VoiceData;
 
