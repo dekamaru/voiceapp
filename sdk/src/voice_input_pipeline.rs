@@ -1,7 +1,7 @@
 use async_channel::{unbounded, Receiver, Sender};
 use rubato::{FftFixedIn, Resampler};
 use tracing::{error, info};
-
+use tracing::log::warn;
 use crate::voice_encoder::{VoiceEncoder, OPUS_FRAME_SAMPLES};
 use voiceapp_protocol::VoiceData;
 
@@ -48,7 +48,10 @@ impl VoiceInputPipeline {
         output_tx: Sender<VoiceData>,
     ) {
         const TARGET_SAMPLE_RATE: usize = 48000;
-        const RESAMPLER_CHUNK_SIZE: usize = 512;
+        const RESAMPLER_CHUNK_SIZE: usize = 480;  // Optimized for Opus frame alignment (480 × 2 = 960)
+        const RESAMPLER_SUB_CHUNKS: usize = 2;    // FFT overlap-add quality/performance balance
+        const RESAMPLE_BUFFER_CAPACITY: usize = RESAMPLER_CHUNK_SIZE * 3;  // 1440 samples
+        const ENCODE_BUFFER_CAPACITY: usize = OPUS_FRAME_SAMPLES * 2;      // 1920 samples
 
         // Create resampler if needed
         let mut resampler = if config.sample_rate != TARGET_SAMPLE_RATE {
@@ -56,7 +59,7 @@ impl VoiceInputPipeline {
                 config.sample_rate,
                 TARGET_SAMPLE_RATE,
                 RESAMPLER_CHUNK_SIZE,
-                2, // sub-chunks for overlap-add
+                RESAMPLER_SUB_CHUNKS, // sub-chunks for overlap-add
                 1, // mono
             ) {
                 Ok(r) => Some(r),
@@ -79,8 +82,8 @@ impl VoiceInputPipeline {
         };
 
         // Buffers
-        let mut resample_buffer = Vec::with_capacity(RESAMPLER_CHUNK_SIZE * 2);
-        let mut encode_buffer = Vec::with_capacity(OPUS_FRAME_SAMPLES * 2);
+        let mut resample_buffer = Vec::with_capacity(RESAMPLE_BUFFER_CAPACITY);
+        let mut encode_buffer = Vec::with_capacity(ENCODE_BUFFER_CAPACITY);
 
         // Pre-allocate resampler output buffer for zero-allocation processing
         let mut resample_out_buffer = if let Some(ref mut r) = resampler {
@@ -116,6 +119,12 @@ impl VoiceInputPipeline {
                                         encode_buffer.extend_from_slice(
                                             &resample_out_buffer[0][0..resampled_size],
                                         );
+
+                                        // Monitor buffer growth in debug builds
+                                        #[cfg(debug_assertions)]
+                                        if encode_buffer.len() > OPUS_FRAME_SAMPLES * 3 {
+                                            warn!("Encode buffer growing large: {} samples", encode_buffer.len());
+                                        }
                                     }
                                     Err(e) => {
                                         error!("Resampling error: {}", e);
