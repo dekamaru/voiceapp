@@ -1,6 +1,7 @@
 use async_channel::{unbounded, Receiver, Sender};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::RwLock;
@@ -139,9 +140,10 @@ impl VoiceClient {
         username: &str,
     ) -> Result<(), VoiceClientError> {
         // Connect TCP socket
-        let tcp_socket = TcpStream::connect(management_server_addr)
+        let tcp_socket = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(management_server_addr))
             .await
-            .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
+            .map_err(|_| VoiceClientError::ConnectionFailed("Operation timed out".to_string()))?  // Handle timeout
+            .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;  // Handle connection error
 
         info!("[Management server] Connected to {}", management_server_addr);
 

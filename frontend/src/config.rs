@@ -13,6 +13,12 @@ pub struct ServerConfig {
     pub username: String,
 }
 
+impl ServerConfig {
+    pub fn is_credentials_filled(&self) -> bool {
+        !self.address.is_empty() && !self.username.is_empty()
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {

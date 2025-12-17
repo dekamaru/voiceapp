@@ -9,7 +9,7 @@ use iced::widget::container::Style;
 use iced::widget::{button, container, row, space, stack, text, text_input, Space};
 use iced::{border, Background, Border, Color, Element, Font, Length, Padding, Task};
 use std::sync::{Arc, RwLock};
-use tracing::debug;
+use tracing::{debug, info};
 
 #[derive(Default)]
 pub struct LoginPage {
