@@ -358,6 +358,11 @@ impl VoiceClient {
             .collect()
     }
 
+    pub fn is_main_user_in_voice(&self) -> bool {
+        let state = self.state.blocking_read();
+        state.participants.get(&state.user_id.unwrap_or(0)).map(|info| info.in_voice).unwrap_or(false)
+    }
+
     /// Get UDP send channel for AudioManager to forward encoded voice packets
     pub fn get_udp_send_tx(&self) -> Sender<Vec<u8>> {
         self.udp_send_tx.clone()

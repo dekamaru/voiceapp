@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use crate::audio::AudioManager;
 use crate::pages::login::{LoginPage, LoginPageMessage};
 use crate::pages::room::{RoomPage, RoomPageMessage};
-use crate::pages::settings::SettingsPageMessage;
+use crate::pages::settings::{SettingsPage, SettingsPageMessage};
 use iced::Task;
 use std::sync::{Arc, RwLock};
 use tracing::{error, info};
@@ -13,6 +14,8 @@ pub enum Message {
     LoginPage(LoginPageMessage),
     RoomPage(RoomPageMessage),
     SettingsPage(SettingsPageMessage),
+
+    SwitchPage(PageType),
 
     // Voice client message bus
     ExecuteVoiceCommand(VoiceCommand),
@@ -47,10 +50,20 @@ pub enum VoiceCommandResult {
 pub trait Page {
     fn update(&mut self, message: Message) -> Task<Message>;
     fn view(&self) -> iced::Element<'_, Message>;
+    fn on_open(&mut self) -> Task<Message> { Task::none() }
+    fn on_close(&mut self) -> Task<Message> { Task::none() }
+}
+
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub enum PageType {
+    Login,
+    Room,
+    Settings,
 }
 
 pub struct Application {
-    page: Box<dyn Page>,
+    pages: HashMap<PageType, Box<dyn Page>>,
+    current_page: PageType,
     voice_client: Arc<VoiceClient>,
     audio_manager: AudioManager,
     config: Arc<RwLock<AppConfig>>,
@@ -61,7 +74,6 @@ impl Application {
         let config = AppConfig::load().unwrap();
         let voice_client = Arc::new(VoiceClient::new(config.audio.output_device.sample_rate).expect("failed to init voice client"));
         let audio_manager = AudioManager::new(voice_client.clone());
-
         let events_task = Task::run(voice_client.event_stream(), |e| Message::ServerEventReceived(e));
         let auto_login_task = if config.server.is_credentials_filled() {
             info!("Credentials read from config, performing auto login");
@@ -81,33 +93,40 @@ impl Application {
 
         let config = Arc::new(RwLock::new(config));
 
+        let mut pages = HashMap::<PageType, Box<dyn Page>>::from([
+            (PageType::Login, Box::new(LoginPage::new(config.clone())) as Box<dyn Page>),
+            (PageType::Room, Box::new(RoomPage::new()) as Box<dyn Page>),
+            (PageType::Settings, Box::new(SettingsPage::new()) as Box<dyn Page>)
+        ]);
+
+        let on_open_task = pages.get_mut(&PageType::Login).unwrap().on_open();
+
         (
             Self {
-                // TODO: pass auto-login here so login can draw loading state instead
-                page: Box::new(LoginPage::new(config.clone())),
+                current_page: PageType::Login,
+                pages,
                 voice_client,
                 audio_manager,
                 config,
             },
-            Task::batch([events_task, auto_login_task]),
+            Task::batch([on_open_task, events_task, auto_login_task]),
         )
     }
 
     pub fn view(&self) -> iced::Element<Message> {
-        self.page.view()
+        self.pages.get(&self.current_page).unwrap().view()
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::ExecuteVoiceCommand(command) => self.handle_voice_command(command),
+        let app_task = match &message {
+            Message::ExecuteVoiceCommand(command) => self.handle_voice_command(command.clone()),
             Message::VoiceCommandResult(VoiceCommandResult::Connect(Ok((address, username)))) => {
                 self.write_config(|config| {
-                    config.server.address = address;
-                    config.server.username = username;
+                    config.server.address = address.clone();
+                    config.server.username = username.clone();
                 });
 
-                self.page = Box::new(RoomPage::new());
-                Task::none()
+                Task::done(Message::SwitchPage(PageType::Room))
             }
             Message::VoiceCommandResult(VoiceCommandResult::JoinVoiceChannel(Ok(()))) => {
                 // Start audio when join succeeds
@@ -115,47 +134,55 @@ impl Application {
 
                 // Start recording
                 if let Err(e) = self.audio_manager.start_recording() {
-                    tracing::error!("Failed to start recording: {}", e);
+                    error!("Failed to start recording: {}", e);
                 }
 
                 // Create output streams for all users currently in voice
                 for user_id in users_in_voice {
                     if let Err(e) = self.audio_manager.create_stream_for_user(user_id) {
-                        tracing::error!("Failed to create output stream for user {}: {}", user_id, e);
-                    } else {
-                        tracing::info!("Created output stream for existing user {}", user_id);
+                        error!("Failed to create output stream for user {}: {}", user_id, e);
                     }
-                }
+                };
 
-                // propagate further
-                self.page.update(message)
+                Task::none()
             }
             Message::VoiceCommandResult(VoiceCommandResult::LeaveVoiceChannel(Ok(()))) => {
                 // Stop audio when leave succeeds
                 self.audio_manager.stop_recording();
                 self.audio_manager.stop_playback();
 
-                // propagate further
-                self.page.update(message)
+                Task::none()
             }
             Message::ServerEventReceived(VoiceClientEvent::UserJoinedVoice { user_id }) => {
                 // Create output stream for new user in voice
-                if let Err(e) = self.audio_manager.create_stream_for_user(user_id) {
-                    tracing::error!("Failed to create output stream for user {}: {}", user_id, e);
+                if self.voice_client.is_main_user_in_voice() {
+                    if let Err(e) = self.audio_manager.create_stream_for_user(*user_id) {
+                        error!("Failed to create output stream for user {}: {}", user_id, e);
+                    };
                 }
 
-                // Propagate to page for UI updates
-                self.page.update(message)
+                Task::none()
             }
             Message::ServerEventReceived(VoiceClientEvent::UserLeftVoice { user_id }) => {
-                // Remove output stream for user who left voice
-                self.audio_manager.remove_stream_for_user(user_id);
+                if self.voice_client.is_main_user_in_voice() {
+                    self.audio_manager.remove_stream_for_user(*user_id);
+                }
 
-                // propagate further
-                self.page.update(message)
+                Task::none()
+            },
+            Message::SwitchPage(pageType) => {
+                let on_close_task =self.pages.get_mut(&self.current_page).unwrap().on_close();
+                let on_open_task = self.pages.get_mut(pageType).unwrap().on_open();
+                self.current_page = pageType.clone();
+                
+                Task::batch([on_close_task, on_open_task])
             }
-            other => self.page.update(other),
-        }
+            _ => Task::none()
+        };
+
+        let mut tasks = vec![app_task];
+        tasks.extend(self.pages.values_mut().map(|page| page.update(message.clone())));
+        Task::batch(tasks)
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {

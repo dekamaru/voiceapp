@@ -1,4 +1,4 @@
-use crate::application::{Message, Page, VoiceCommand, VoiceCommandResult};
+use crate::application::{Message, Page, PageType, VoiceCommand, VoiceCommandResult};
 use crate::colors::{
     color_alert, color_success, debug_red, divider_bg, slider_bg, slider_thumb, text_chat_header,
     text_primary, text_secondary, DARK_CONTAINER_BACKGROUND,
@@ -54,8 +54,6 @@ pub struct RoomPage {
     chat_message: String,
     participants: HashMap<u64, ParticipantInfo>,
     chat_history: BTreeMap<u64, ChatMessage>,
-    show_settings: bool,
-    settings: SettingsPage,
 }
 
 #[derive(Debug, Clone)]
@@ -64,7 +62,6 @@ pub enum RoomPageMessage {
     JoinLeaveToggle,
     ChatMessageChanged(String),
     ChatMessageSubmitted,
-    SettingsToggle,
 }
 
 impl Into<Message> for RoomPageMessage {
@@ -75,17 +72,12 @@ impl Into<Message> for RoomPageMessage {
 
 impl RoomPage {
     pub fn new() -> Self {
-        // Create settings page - stream will start when settings is opened
-        let settings = SettingsPage::new();
-
         Self {
-            settings,
             user_id: 0,
             muted: false,
             chat_message: String::new(),
             participants: HashMap::new(),
             chat_history: BTreeMap::new(),
-            show_settings: false,
         }
     }
 
@@ -265,7 +257,7 @@ impl RoomPage {
 
         let settings_button = container(
             Widgets::icon_button(Icons::gear_six_fill(None, 24))
-                .on_press(RoomPageMessage::SettingsToggle.into()),
+                .on_press(Message::SwitchPage(PageType::Settings)),
         )
         .align_y(Alignment::Center)
         .height(48);
@@ -482,21 +474,7 @@ impl Page for RoomPage {
                         ));
                     }
                 }
-                RoomPageMessage::SettingsToggle => {
-                    if self.show_settings {
-                        // Closing settings - stop the input stream
-                        self.settings.stop_input_stream();
-                        self.show_settings = false;
-                    } else {
-                        // Opening settings - start the input stream
-                        self.show_settings = true;
-                        return self.settings.start_input_stream();
-                    }
-                }
             },
-            Message::SettingsPage(_) | Message::VoiceInputSamplesReceived(_) => {
-                return self.settings.update(message);
-            }
             Message::VoiceCommandResult(result) => match result {
                 VoiceCommandResult::JoinVoiceChannel(status) => {
                     if status.is_ok() {
@@ -580,17 +558,6 @@ impl Page for RoomPage {
                     }
                 }
             },
-            Message::KeyPressed(key) => {
-                if self.show_settings
-                    && matches!(
-                        key,
-                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
-                    )
-                {
-                    self.settings.stop_input_stream();
-                    self.show_settings = false;
-                }
-            }
             _ => {
                 debug!("Ignoring event in RoomPage {:?}", message);
             }
@@ -600,10 +567,6 @@ impl Page for RoomPage {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        if self.show_settings {
-            self.settings.view()
-        } else {
-            self.main_screen().into()
-        }
+        self.main_screen().into()
     }
 }

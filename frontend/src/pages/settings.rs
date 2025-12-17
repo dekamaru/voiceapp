@@ -1,4 +1,4 @@
-use crate::application::{Message, Page};
+use crate::application::{Message, Page, PageType};
 use crate::audio::{create_input_stream, list_input_devices, list_output_devices};
 use crate::colors::{debug_red, text_primary, DARK_BACKGROUND, DARK_CONTAINER_BACKGROUND};
 use crate::icons::Icons;
@@ -309,8 +309,8 @@ impl SettingsPage {
 
         let header = row!(
             container(
-                widgets::Widgets::icon_button(Icons::arrow_left_solid(None, 24))
-                    .on_press(RoomPageMessage::SettingsToggle.into())
+                Widgets::icon_button(Icons::arrow_left_solid(None, 24))
+                    .on_press(Message::SwitchPage(PageType::Room))
                     .height(Length::Fill)
             ),
             container(text("Settings").font(bold).size(18))
@@ -402,6 +402,9 @@ impl SettingsPage {
 }
 
 impl Page for SettingsPage {
+    fn on_open(&mut self) -> Task<Message> { self.start_input_stream() }
+    fn on_close(&mut self) -> Task<Message> { self.stop_input_stream(); Task::none() }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::SettingsPage(settings_message) => {
@@ -438,6 +441,11 @@ impl Page for SettingsPage {
                             tracing::error!("Input stream task error: {}", e);
                         }
                     },
+                }
+            },
+            Message::KeyPressed(key) => {
+                if matches!(key,iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)) {
+                    return Task::done(Message::SwitchPage(PageType::Room))
                 }
             }
             Message::VoiceInputSamplesReceived(samples) => {
