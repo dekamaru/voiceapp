@@ -3,35 +3,34 @@ use cpal::Stream;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
-use voiceapp_sdk::{voiceapp_protocol, VoiceDecoder, VoiceInputPipeline, VoiceInputPipelineConfig};
+use voiceapp_sdk::{voiceapp_protocol, VoiceClient, VoiceInputPipeline, VoiceInputPipelineConfig};
 
 use crate::audio::input::create_input_stream;
 use crate::audio::output::{create_output_stream, AudioOutputHandle};
 
 /// Audio manager that handles recording and playback lifecycle
+#[derive(Clone)]
 pub struct AudioManager {
     voice_pipeline: Arc<Mutex<Option<VoiceInputPipeline>>>,
-    decoder: Arc<Mutex<Option<Arc<VoiceDecoder>>>>,
+    decoder_manager: Arc<voiceapp_sdk::VoiceDecoderManager>,
     input_stream: Arc<Mutex<Option<Stream>>>,
     input_receiver_task: Arc<Mutex<Option<JoinHandle<()>>>>,
     pipeline_forward_task: Arc<Mutex<Option<JoinHandle<()>>>>,
-    output_handle: Arc<Mutex<Option<AudioOutputHandle>>>,
-    output_receiver_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    output_streams: Arc<Mutex<std::collections::HashMap<u64, AudioOutputHandle>>>,
     udp_send_tx: Sender<Vec<u8>>,
 }
 
 impl AudioManager {
-    /// Create a new AudioManager with UDP send channel
-    pub fn new(udp_send_tx: Sender<Vec<u8>>) -> Self {
-        AudioManager {
+    /// Create a new AudioManager with UDP send channel and decoder manager
+    pub fn new(voice_client: Arc<VoiceClient>) -> Self {
+        Self {
             voice_pipeline: Arc::new(Mutex::new(None)),
-            decoder: Arc::new(Mutex::new(None)),
+            decoder_manager: voice_client.get_decoder_manager(),
             input_stream: Arc::new(Mutex::new(None)),
             input_receiver_task: Arc::new(Mutex::new(None)),
             pipeline_forward_task: Arc::new(Mutex::new(None)),
-            output_handle: Arc::new(Mutex::new(None)),
-            output_receiver_task: Arc::new(Mutex::new(None)),
-            udp_send_tx,
+            output_streams: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            udp_send_tx: voice_client.get_udp_send_tx()
         }
     }
 
@@ -112,45 +111,50 @@ impl AudioManager {
         info!("Audio recording stopped");
     }
 
-    /// Start playing audio output from decoded voice stream
-    /// Takes a decoder that's already receiving packets from VoiceClient
-    pub fn start_playback(&self, decoder: Arc<VoiceDecoder>) -> Result<(), Box<dyn std::error::Error>> {
-        info!("Starting audio playback");
+    /// Create an output stream for a specific user
+    pub fn create_stream_for_user(&self, user_id: u64) -> Result<(), Box<dyn std::error::Error>> {
+        info!("Creating output stream for user {}", user_id);
 
-        // Store decoder reference
-        *self.decoder.lock().unwrap() = Some(decoder.clone());
+        // Get decoder for this user
+        let decoder = self.decoder_manager.get_decoder(user_id)
+            .ok_or_else(|| format!("No decoder found for user {}", user_id))?;
 
-        // Create the output stream
+        // Create output stream for this user's decoder
         let (output_handle, detected_rate) = create_output_stream(decoder)?;
 
-        info!("Audio playback started at {} Hz", detected_rate);
+        info!("Created output stream for user {} at {} Hz", user_id, detected_rate);
 
-        // Store the output handle to keep the stream alive
-        *self.output_handle.lock().unwrap() = Some(output_handle);
+        // Store the output handle
+        let mut streams = self.output_streams.lock().unwrap();
+        streams.insert(user_id, output_handle);
 
         Ok(())
     }
 
-    /// Stop playing audio output
+    /// Remove output stream for a specific user
+    pub fn remove_stream_for_user(&self, user_id: u64) {
+        info!("Removing output stream for user {}", user_id);
+
+        let mut streams = self.output_streams.lock().unwrap();
+        if streams.remove(&user_id).is_some() {
+            info!("Removed output stream for user {}", user_id);
+        }
+    }
+
+    /// Stop playing audio output for all users
     pub fn stop_playback(&self) {
         info!("Stopping audio playback");
 
-        // Drop the output handle (this stops the stream)
-        if let Ok(mut handle_opt) = self.output_handle.lock() {
-            *handle_opt = None;
+        // Drop all output streams
+        if let Ok(mut streams) = self.output_streams.lock() {
+            let count = streams.len();
+            streams.clear();
+            info!("Stopped {} output streams", count);
         }
 
-        // Abort the output receiver task
-        if let Ok(mut task_opt) = self.output_receiver_task.lock() {
-            if let Some(task) = task_opt.take() {
-                task.abort();
-            }
-        }
-
-        // Flush decoder buffer if it exists
-        if let Some(decoder) = self.decoder.lock().unwrap().as_ref() {
-            decoder.flush();
-        }
+        // Flush all decoders
+        let decoder_manager = self.decoder_manager.clone();
+        decoder_manager.flush_all();
 
         info!("Audio playback stopped");
     }

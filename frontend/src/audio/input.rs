@@ -25,9 +25,9 @@ fn find_input_device() -> Result<Device, Box<dyn std::error::Error>> {
 /// 4. Any Hz + F32
 /// 5. First available config
 /// Returns (SampleRate, SampleFormat)
-pub fn find_best_stream_config(
+pub fn find_best_input_stream_config(
     device: &Device,
-) -> Result<(SampleRate, SampleFormat), Box<dyn std::error::Error>> {
+) -> Result<(SampleRate, SampleFormat, u16), Box<dyn std::error::Error>> {
     let configs: Vec<_> = device.supported_input_configs()?.collect();
 
     if configs.is_empty() {
@@ -49,10 +49,10 @@ pub fn find_best_stream_config(
                     if config.min_sample_rate() <= SampleRate(rate)
                         && config.max_sample_rate() >= SampleRate(rate)
                     {
-                        return Ok((SampleRate(rate), format));
+                        return Ok((SampleRate(rate), format, config.channels()));
                     }
                 } else {
-                    return Ok((config.max_sample_rate(), format));
+                    return Ok((config.min_sample_rate(), format, config.channels()));
                 }
             }
         }
@@ -60,7 +60,7 @@ pub fn find_best_stream_config(
 
     // Fallback: first available config
     let first_config = &configs[0];
-    Ok((first_config.max_sample_rate(), first_config.sample_format()))
+    Ok((first_config.min_sample_rate(), first_config.sample_format(), first_config.channels()))
 }
 
 /// Get input stream config: prefer F32, fall back to any format that supports 48kHz
@@ -68,7 +68,7 @@ pub fn find_best_stream_config(
 fn get_stream_config(
     device: &Device,
 ) -> Result<(StreamConfig, SampleFormat), Box<dyn std::error::Error>> {
-    let (sample_rate, format) = find_best_stream_config(device)?;
+    let (sample_rate, format, _) = find_best_input_stream_config(device)?;
 
     info!("Selected input config: {} Hz, {:?}", sample_rate.0, format);
 

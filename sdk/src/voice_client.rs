@@ -7,8 +7,8 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
-use crate::voice_decoder::VoiceDecoder;
 use voiceapp_protocol::{PacketId, ParticipantInfo};
+use crate::voice_decoder_manager::VoiceDecoderManager;
 
 /// Errors that can occur with VoiceClient
 #[derive(Debug, Clone)]
@@ -73,7 +73,7 @@ pub struct VoiceClient {
     response_rx: Receiver<(PacketId, Vec<u8>)>,
     event_tx: Sender<(PacketId, Vec<u8>)>,
     event_rx: Receiver<(PacketId, Vec<u8>)>,
-    decoder: Arc<VoiceDecoder>,
+    decoder_manager: Arc<VoiceDecoderManager>,
     udp_send_tx: Sender<Vec<u8>>,
     udp_send_rx: Receiver<Vec<u8>>,
     udp_recv_tx: Sender<(PacketId, Vec<u8>)>,
@@ -85,16 +85,14 @@ pub struct VoiceClient {
 impl VoiceClient {
     /// Create a new VoiceClient with all channels initialized
     /// sample_rate: target output sample rate for the decoder (should match audio device)
-    pub fn new(sample_rate: u32) -> Result<Self, VoiceClientError> {
+    pub fn new(output_sample_rate: u32) -> Result<Self, VoiceClientError> {
         // Create TCP channels
         let (request_tx, request_rx) = unbounded();
         let (response_tx, response_rx) = unbounded();
         let (event_tx, event_rx) = unbounded();
 
-        // Create decoder with specified sample rate
-        let decoder = Arc::new(
-            VoiceDecoder::new(sample_rate).map_err(|e| VoiceClientError::SystemError(e.to_string()))?,
-        );
+        // Create decoder manager with specified sample rate
+        let decoder_manager = Arc::new(VoiceDecoderManager::new(output_sample_rate));
 
         // Create UDP channels
         let (udp_send_tx, udp_send_rx) = unbounded();
@@ -117,7 +115,7 @@ impl VoiceClient {
             response_rx,
             event_tx,
             event_rx,
-            decoder,
+            decoder_manager,
             udp_send_tx,
             udp_send_rx,
             udp_recv_tx,
@@ -134,7 +132,7 @@ impl VoiceClient {
     }
 
     pub async fn connect(
-        &mut self,
+        &self,
         management_server_addr: &str,
         voice_server_addr: &str,
         username: &str,
@@ -160,18 +158,8 @@ impl VoiceClient {
         info!("[Voice server] Connected to {}", voice_server_addr);
 
         // Spawn background tasks
-        self.spawn_tcp_handler(
-            tcp_socket,
-            self.request_rx.clone(),
-            self.response_tx.clone(),
-            self.event_tx.clone(),
-        );
-        self.spawn_udp_handler(
-            udp_socket,
-            self.udp_send_rx.clone(),
-            self.udp_recv_tx.clone(),
-            self.decoder.clone(),
-        );
+        self.spawn_tcp_handler(tcp_socket);
+        self.spawn_udp_handler(udp_socket);
         self.spawn_event_processor();
 
         // Authenticate
@@ -274,7 +262,7 @@ impl VoiceClient {
         ))
     }
 
-    pub async fn join_channel(&mut self) -> Result<(), VoiceClientError> {
+    pub async fn join_channel(&self) -> Result<(), VoiceClientError> {
         debug!("Joining voice channel");
 
         // Encode and send JoinVoiceChannelRequest
@@ -302,7 +290,7 @@ impl VoiceClient {
         Ok(())
     }
 
-    pub async fn leave_channel(&mut self) -> Result<(), VoiceClientError> {
+    pub async fn leave_channel(&self) -> Result<(), VoiceClientError> {
         debug!("Leaving voice channel");
 
         // Encode and send LeaveVoiceChannelRequest
@@ -330,7 +318,7 @@ impl VoiceClient {
         Ok(())
     }
 
-    pub async fn send_message(&mut self, message: &str) -> Result<(), VoiceClientError> {
+    pub async fn send_message(&self, message: &str) -> Result<(), VoiceClientError> {
         debug!("Sending chat message");
 
         // Encode and send ChatMessageRequest
@@ -356,8 +344,18 @@ impl VoiceClient {
 
     /// Get a receiver for decoded voice output (mono F32 PCM samples at 48kHz)
     /// Subscribe to incoming voice from other participants
-    pub fn get_decoder(&self) -> Arc<VoiceDecoder> {
-        self.decoder.clone()
+    pub fn get_decoder_manager(&self) -> Arc<VoiceDecoderManager> {
+        self.decoder_manager.clone()
+    }
+
+    /// Get list of user IDs currently in voice channel (blocking version)
+    pub fn get_users_in_voice(&self) -> Vec<u64> {
+        let state = self.state.blocking_read();
+        state.participants
+            .iter()
+            .filter(|(_, info)| info.in_voice)
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     /// Get UDP send channel for AudioManager to forward encoded voice packets
@@ -370,13 +368,14 @@ impl VoiceClient {
         let state = Arc::clone(&self.state);
         let event_rx = self.event_rx.clone();
         let client_events_tx = self.client_events_tx.clone();
+        let decoder_manager = self.decoder_manager.clone();
 
         tokio::spawn(async move {
             loop {
                 match event_rx.recv().await {
                     Ok((packet_id, payload)) => {
                         if let Err(e) =
-                            Self::handle_event(&state, packet_id, payload, &client_events_tx).await
+                            Self::handle_event(&state, packet_id, payload, &client_events_tx, &decoder_manager).await
                         {
                             error!("Event handling error: {}", e);
                             break;
@@ -392,13 +391,12 @@ impl VoiceClient {
     }
 
     /// Spawn TCP handler task (called internally from connect)
-    fn spawn_tcp_handler(
-        &self,
-        socket: TcpStream,
-        request_rx: Receiver<Vec<u8>>,
-        response_tx: Sender<(PacketId, Vec<u8>)>,
-        event_tx: Sender<(PacketId, Vec<u8>)>,
-    ) {
+    fn spawn_tcp_handler(&self, socket: TcpStream) {
+        let request_tx = self.request_tx.clone();
+        let request_rx = self.request_rx.clone();
+        let response_tx = self.response_tx.clone();
+        let event_tx = self.event_tx.clone();
+
         tokio::spawn(async move {
             if let Err(e) = tcp_handler(socket, request_rx, response_tx, event_tx).await {
                 error!("TCP handler error: {}", e);
@@ -407,15 +405,13 @@ impl VoiceClient {
     }
 
     /// Spawn UDP handler task (called internally from connect)
-    fn spawn_udp_handler(
-        &self,
-        socket: UdpSocket,
-        send_rx: Receiver<Vec<u8>>,
-        recv_tx: Sender<(PacketId, Vec<u8>)>,
-        decoder: Arc<VoiceDecoder>,
-    ) {
+    fn spawn_udp_handler(&self, socket: UdpSocket) {
+        let send_rx = self.udp_send_rx.clone();
+        let recv_tx = self.udp_recv_tx.clone();
+        let decoder_manager = self.decoder_manager.clone();
+
         tokio::spawn(async move {
-            if let Err(e) = udp_handler(socket, send_rx, recv_tx, decoder).await {
+            if let Err(e) = udp_handler(socket, send_rx, recv_tx, decoder_manager).await {
                 error!("UDP handler error: {}", e);
             }
         });
@@ -427,6 +423,7 @@ impl VoiceClient {
         packet_id: PacketId,
         payload: Vec<u8>,
         client_events_tx: &Sender<VoiceClientEvent>,
+        decoder_manager: &Arc<VoiceDecoderManager>,
     ) -> Result<(), VoiceClientError> {
         match packet_id {
             PacketId::UserJoinedServer => {
@@ -487,6 +484,9 @@ impl VoiceClient {
                 let user_id = voiceapp_protocol::decode_user_left_voice(&payload)
                     .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
 
+                // Remove decoder for user who left
+                decoder_manager.remove_user(user_id).await;
+
                 let mut s = state.write().await;
                 if let Some(participant) = s.participants.get_mut(&user_id) {
                     participant.in_voice = false;
@@ -525,7 +525,7 @@ impl VoiceClient {
 
     /// Wait for a response packet, decode it, and handle timeout with custom timeout
     async fn wait_for_response_with<T, F>(
-        &mut self,
+        &self,
         expected_id: PacketId,
         timeout_secs: u64,
         decoder: F,
@@ -622,7 +622,7 @@ async fn udp_handler(
     socket: UdpSocket,
     send_rx: Receiver<Vec<u8>>,
     recv_tx: Sender<(PacketId, Vec<u8>)>,
-    decoder: Arc<VoiceDecoder>,
+    decoder_manager: Arc<VoiceDecoderManager>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut read_buf = [0u8; 4096];
 
@@ -652,9 +652,7 @@ async fn udp_handler(
                 // Decode voice data packets
                 if packet_id == PacketId::VoiceData {
                     if let Ok(voice_packet) = voiceapp_protocol::decode_voice_data(&payload) {
-                        // Insert packet into NetEQ for jitter buffering and reordering
-                        // CPAL callback will pull audio on-demand via get_audio()
-                        if let Err(e) = decoder.insert_packet(voice_packet).await {
+                        if let Err(e) = decoder_manager.insert_packet(voice_packet).await {
                             debug!("Failed to insert voice packet: {}", e);
                         }
                     }

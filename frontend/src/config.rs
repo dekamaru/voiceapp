@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use cpal::traits::{DeviceTrait, HostTrait};
+use crate::audio::{find_best_input_stream_config, find_best_output_stream_config};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -26,7 +27,7 @@ pub struct AudioDevice {
     pub device_name: String,
     pub sample_rate: u32,
     pub sample_format: String,
-    pub channels: u8,
+    pub channels: u16,
 }
 
 impl ServerConfig {
@@ -41,7 +42,8 @@ impl Default for AppConfig {
         let host = cpal::default_host();
         let input_device = host.default_input_device().expect("failed to get default input device");
         let output_device = host.default_output_device().expect("failed to get default output device");
-
+        let input_stream_config = find_best_input_stream_config(&input_device).expect("failed to find best input stream config");
+        let output_stream_config = find_best_output_stream_config(&output_device).expect("failed to find best output stream config");
 
         Self {
             server: ServerConfig {
@@ -51,15 +53,15 @@ impl Default for AppConfig {
             audio: AudioConfig {
                 input_device: AudioDevice {
                     device_name: input_device.name().expect("failed to get input device name").to_string(),
-                    sample_rate: 0,
-                    sample_format: "F32".to_string(),
-                    channels: 1
+                    sample_rate: input_stream_config.0.0,
+                    sample_format: input_stream_config.1.to_string(),
+                    channels: input_stream_config.2
                 },
                 output_device: AudioDevice {
                     device_name: output_device.name().expect("failed to get input device name").to_string(),
-                    sample_rate: 0,
-                    sample_format: "F32".to_string(),
-                    channels: 1
+                    sample_rate: output_stream_config.0.0,
+                    sample_format: output_stream_config.1.to_string(),
+                    channels: output_stream_config.2
                 },
             }
         }

@@ -2,10 +2,8 @@ use crate::audio::AudioManager;
 use crate::pages::login::{LoginPage, LoginPageMessage};
 use crate::pages::room::{RoomPage, RoomPageMessage};
 use crate::pages::settings::SettingsPageMessage;
-use async_channel::Receiver;
 use iced::Task;
 use std::sync::{Arc, RwLock};
-use tokio::sync::Mutex;
 use tracing::{error, info};
 use voiceapp_sdk::{VoiceClient, VoiceClientEvent};
 use crate::config::AppConfig;
@@ -53,8 +51,7 @@ pub trait Page {
 
 pub struct Application {
     page: Box<dyn Page>,
-    voice_client: Arc<Mutex<VoiceClient>>,
-    events_rx: Receiver<VoiceClientEvent>,
+    voice_client: Arc<VoiceClient>,
     audio_manager: AudioManager,
     config: Arc<RwLock<AppConfig>>,
 }
@@ -62,22 +59,13 @@ pub struct Application {
 impl Application {
     pub fn new() -> (Self, Task<Message>) {
         let config = AppConfig::load().unwrap();
+        let voice_client = Arc::new(VoiceClient::new(config.audio.output_device.sample_rate).expect("failed to init voice client"));
+        let audio_manager = AudioManager::new(voice_client.clone());
 
-        // Detect output device sample rate before creating VoiceClient
-        use cpal::traits::{DeviceTrait, HostTrait};
-        let host = cpal::default_host();
-        let output_device = host.default_output_device()
-            .expect("No output device found");
-        let default_config = output_device.default_output_config()
-            .expect("Failed to get output config");
-        let sample_rate = default_config.sample_rate().0;
-        tracing::info!("Detected output device sample rate: {} Hz", sample_rate);
+        let events_task = Task::run(voice_client.event_stream(), |e| Message::ServerEventReceived(e));
+        let auto_login_task = if config.server.is_credentials_filled() {
+            info!("Credentials read from config, performing auto login");
 
-        let voice_client = VoiceClient::new(sample_rate).expect("failed to init voice client");
-        let audio_manager = AudioManager::new(voice_client.get_udp_send_tx());
-        let events_rx = voice_client.event_stream();
-
-        let login_task = if config.server.is_credentials_filled() {
             Task::done(
                 Message::ExecuteVoiceCommand(
                     VoiceCommand::Connect {
@@ -91,18 +79,17 @@ impl Application {
             Task::none()
         };
 
-        let locked_config = Arc::new(RwLock::new(config));
+        let config = Arc::new(RwLock::new(config));
 
         (
             Self {
                 // TODO: pass auto-login here so login can draw loading state instead
-                page: Box::new(LoginPage::new(locked_config.clone())),
-                voice_client: Arc::new(Mutex::new(voice_client)),
-                events_rx,
+                page: Box::new(LoginPage::new(config.clone())),
+                voice_client,
                 audio_manager,
-                config: locked_config,
+                config,
             },
-            login_task,
+            Task::batch([events_task, auto_login_task]),
         )
     }
 
@@ -120,20 +107,24 @@ impl Application {
                 });
 
                 self.page = Box::new(RoomPage::new());
-                Task::run(self.events_rx.clone(), |e| Message::ServerEventReceived(e))
+                Task::none()
             }
             Message::VoiceCommandResult(VoiceCommandResult::JoinVoiceChannel(Ok(()))) => {
                 // Start audio when join succeeds
-                // Get decoder from VoiceClient (which is already receiving voice packets)
-                let voice_client = self.voice_client.blocking_lock();
-                let decoder = voice_client.get_decoder();
-                drop(voice_client);
+                let users_in_voice = self.voice_client.get_users_in_voice();
 
-                if let Err(e) = self.audio_manager.start_playback(decoder) {
-                    tracing::error!("Failed to start audio playback: {}", e);
-                }
+                // Start recording
                 if let Err(e) = self.audio_manager.start_recording() {
                     tracing::error!("Failed to start recording: {}", e);
+                }
+
+                // Create output streams for all users currently in voice
+                for user_id in users_in_voice {
+                    if let Err(e) = self.audio_manager.create_stream_for_user(user_id) {
+                        tracing::error!("Failed to create output stream for user {}: {}", user_id, e);
+                    } else {
+                        tracing::info!("Created output stream for existing user {}", user_id);
+                    }
                 }
 
                 // propagate further
@@ -143,6 +134,22 @@ impl Application {
                 // Stop audio when leave succeeds
                 self.audio_manager.stop_recording();
                 self.audio_manager.stop_playback();
+
+                // propagate further
+                self.page.update(message)
+            }
+            Message::ServerEventReceived(VoiceClientEvent::UserJoinedVoice { user_id }) => {
+                // Create output stream for new user in voice
+                if let Err(e) = self.audio_manager.create_stream_for_user(user_id) {
+                    tracing::error!("Failed to create output stream for user {}: {}", user_id, e);
+                }
+
+                // Propagate to page for UI updates
+                self.page.update(message)
+            }
+            Message::ServerEventReceived(VoiceClientEvent::UserLeftVoice { user_id }) => {
+                // Remove output stream for user who left voice
+                self.audio_manager.remove_stream_for_user(user_id);
 
                 // propagate further
                 self.page.update(message)
@@ -161,7 +168,7 @@ impl Application {
         })
     }
 
-    fn handle_voice_command(&mut self, command: VoiceCommand) -> Task<Message> {
+    fn handle_voice_command(&self, command: VoiceCommand) -> Task<Message> {
         let client = self.voice_client.clone();
 
         match command {
@@ -175,13 +182,8 @@ impl Application {
                 let username_clone = username.clone();
 
                 Task::perform(
-                    async move {
-                        let mut guard = client.lock().await;
-                        guard
-                            .connect(&management_addr, &voice_addr, &username)
-                            .await
-                    },
-                    move |result| {
+                    async move { client.connect(&management_addr, &voice_addr, &username).await },
+                    |result| {
                         Message::VoiceCommandResult(VoiceCommandResult::Connect(
                             result
                                 .map(|_| (server_addr, username_clone))
@@ -191,33 +193,24 @@ impl Application {
                 )
             }
             VoiceCommand::JoinVoiceChannel => Task::perform(
-                async move {
-                    let mut client_lock = client.lock().await;
-                    client_lock.join_channel().await
-                },
-                move |result| {
+                async move { client.join_channel().await },
+                |result| {
                     Message::VoiceCommandResult(VoiceCommandResult::JoinVoiceChannel(
                         result.map_err(|e| e.to_string()),
                     ))
                 },
             ),
             VoiceCommand::LeaveVoiceChannel => Task::perform(
-                async move {
-                    let mut guard = client.lock().await;
-                    guard.leave_channel().await
-                },
-                move |result| {
+                async move { client.leave_channel().await },
+                |result| {
                     Message::VoiceCommandResult(VoiceCommandResult::LeaveVoiceChannel(
                         result.map_err(|e| e.to_string()),
                     ))
                 },
             ),
             VoiceCommand::SendChatMessage(message) => Task::perform(
-                async move {
-                    let mut guard = client.lock().await;
-                    guard.send_message(&message).await
-                },
-                move |result| {
+                async move { client.send_message(&message).await },
+                |result| {
                     Message::VoiceCommandResult(VoiceCommandResult::SendChatMessage(
                         result.map_err(|e| e.to_string()),
                     ))
