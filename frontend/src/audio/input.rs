@@ -18,50 +18,73 @@ fn find_input_device() -> Result<Device, Box<dyn std::error::Error>> {
     Ok(device)
 }
 
+/// Find best stream config with prioritization:
+/// 1. 48000 Hz + F32
+/// 2. 48000 Hz + I16
+/// 3. 48000 Hz + U16
+/// 4. Any Hz + F32
+/// 5. First available config
+/// Returns (SampleRate, SampleFormat)
+pub fn find_best_stream_config(
+    device: &Device,
+) -> Result<(SampleRate, SampleFormat), Box<dyn std::error::Error>> {
+    let configs: Vec<_> = device.supported_input_configs()?.collect();
+
+    if configs.is_empty() {
+        return Err("No input configurations found".into());
+    }
+
+    // Priority list: (target_rate, format) where None means any rate
+    let priorities = [
+        (Some(TARGET_SAMPLE_RATE), SampleFormat::F32),
+        (Some(TARGET_SAMPLE_RATE), SampleFormat::I16),
+        (Some(TARGET_SAMPLE_RATE), SampleFormat::U16),
+        (None, SampleFormat::F32),
+    ];
+
+    for (target_rate, format) in priorities {
+        for config in &configs {
+            if config.sample_format() == format {
+                if let Some(rate) = target_rate {
+                    if config.min_sample_rate() <= SampleRate(rate)
+                        && config.max_sample_rate() >= SampleRate(rate)
+                    {
+                        return Ok((SampleRate(rate), format));
+                    }
+                } else {
+                    return Ok((config.max_sample_rate(), format));
+                }
+            }
+        }
+    }
+
+    // Fallback: first available config
+    let first_config = &configs[0];
+    Ok((first_config.max_sample_rate(), first_config.sample_format()))
+}
+
 /// Get input stream config: prefer F32, fall back to any format that supports 48kHz
 /// Returns (StreamConfig, SampleFormat)
 fn get_stream_config(
     device: &Device,
 ) -> Result<(StreamConfig, SampleFormat), Box<dyn std::error::Error>> {
+    let (sample_rate, format) = find_best_stream_config(device)?;
+
+    info!("Selected input config: {} Hz, {:?}", sample_rate.0, format);
+
+    // Find the matching config and create StreamConfig
     let configs: Vec<_> = device.supported_input_configs()?.collect();
-
-    // Try to find F32 config at 48kHz first
-    for config in &configs {
-        if config.sample_format() == SampleFormat::F32
-            && config.max_sample_rate() >= SampleRate(TARGET_SAMPLE_RATE)
+    for config in configs {
+        if config.sample_format() == format
+            && config.min_sample_rate() <= sample_rate
+            && config.max_sample_rate() >= sample_rate
         {
-            let stream_config: StreamConfig = config
-                .with_sample_rate(SampleRate(TARGET_SAMPLE_RATE))
-                .into();
-            return Ok((stream_config, SampleFormat::F32));
-        }
-    }
-
-    // Fall back to any other format at 48kHz
-    for config in &configs {
-        if config.max_sample_rate() >= SampleRate(TARGET_SAMPLE_RATE) {
-            let format = config.sample_format();
-            info!("F32 not available, falling back to {:?} format", format);
-            let stream_config: StreamConfig = config
-                .with_sample_rate(SampleRate(TARGET_SAMPLE_RATE))
-                .into();
+            let stream_config: StreamConfig = config.with_sample_rate(sample_rate).into();
             return Ok((stream_config, format));
         }
     }
 
-    // Fall back to maximum sample rate with best available format
-    if let Some(config) = configs.into_iter().max_by_key(|c| c.max_sample_rate().0) {
-        let format = config.sample_format();
-        let max_rate = config.max_sample_rate();
-        warn!(
-            "48kHz not available, using maximum sample rate {:?} with {:?} format",
-            max_rate, format
-        );
-        let stream_config: StreamConfig = config.with_sample_rate(max_rate).into();
-        return Ok((stream_config, format));
-    }
-
-    Err("No suitable input configuration found".into())
+    Err("Failed to create stream config from selected parameters".into())
 }
 
 /// Convert stereo to mono by averaging channels (F32)

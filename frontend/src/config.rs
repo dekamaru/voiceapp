@@ -25,6 +25,7 @@ pub struct AudioConfig {
 pub struct AudioDevice {
     pub device_name: String,
     pub sample_rate: u32,
+    pub sample_format: String,
     pub channels: u8,
 }
 
@@ -51,11 +52,13 @@ impl Default for AppConfig {
                 input_device: AudioDevice {
                     device_name: input_device.name().expect("failed to get input device name").to_string(),
                     sample_rate: 0,
+                    sample_format: "F32".to_string(),
                     channels: 1
                 },
                 output_device: AudioDevice {
                     device_name: output_device.name().expect("failed to get input device name").to_string(),
                     sample_rate: 0,
+                    sample_format: "F32".to_string(),
                     channels: 1
                 },
             }
