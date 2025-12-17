@@ -113,24 +113,11 @@ impl AudioManager {
     }
 
     /// Start playing audio output from decoded voice stream
-    pub fn start_playback(&self) -> Result<(), Box<dyn std::error::Error>> {
+    /// Takes a decoder that's already receiving packets from VoiceClient
+    pub fn start_playback(&self, decoder: Arc<VoiceDecoder>) -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting audio playback");
 
-        // Detect output device sample rate
-        use cpal::traits::{DeviceTrait, HostTrait};
-        let host = cpal::default_host();
-        let device = host.default_output_device()
-            .ok_or("No output device found")?;
-        let default_config = device.default_output_config()?;
-        let sample_rate = default_config.sample_rate().0;
-
-        info!("Output device sample rate: {} Hz", sample_rate);
-
-        // Create decoder with detected sample rate
-        let decoder = VoiceDecoder::new(sample_rate)?;
-        let decoder = Arc::new(decoder);
-
-        // Store decoder for later use (receiving packets)
+        // Store decoder reference
         *self.decoder.lock().unwrap() = Some(decoder.clone());
 
         // Create the output stream

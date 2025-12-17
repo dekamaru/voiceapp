@@ -63,7 +63,17 @@ impl Application {
     pub fn new() -> (Self, Task<Message>) {
         let config = AppConfig::load().unwrap();
 
-        let voice_client = VoiceClient::new().expect("failed to init voice client");
+        // Detect output device sample rate before creating VoiceClient
+        use cpal::traits::{DeviceTrait, HostTrait};
+        let host = cpal::default_host();
+        let output_device = host.default_output_device()
+            .expect("No output device found");
+        let default_config = output_device.default_output_config()
+            .expect("Failed to get output config");
+        let sample_rate = default_config.sample_rate().0;
+        tracing::info!("Detected output device sample rate: {} Hz", sample_rate);
+
+        let voice_client = VoiceClient::new(sample_rate).expect("failed to init voice client");
         let audio_manager = AudioManager::new(voice_client.get_udp_send_tx());
         let events_rx = voice_client.event_stream();
 
@@ -114,7 +124,12 @@ impl Application {
             }
             Message::VoiceCommandResult(VoiceCommandResult::JoinVoiceChannel(Ok(()))) => {
                 // Start audio when join succeeds
-                if let Err(e) = self.audio_manager.start_playback() {
+                // Get decoder from VoiceClient (which is already receiving voice packets)
+                let voice_client = self.voice_client.blocking_lock();
+                let decoder = voice_client.get_decoder();
+                drop(voice_client);
+
+                if let Err(e) = self.audio_manager.start_playback(decoder) {
                     tracing::error!("Failed to start audio playback: {}", e);
                 }
                 if let Err(e) = self.audio_manager.start_recording() {

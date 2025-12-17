@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect to voice server
     info!("Connecting to voice servers...");
-    let mut client = VoiceClient::new()?;
+    let mut client = VoiceClient::new(48000)?;  // Music bot uses 48kHz audio
     client
         .connect(&server_addr, &voice_server_addr, "music_bot")
         .await?;

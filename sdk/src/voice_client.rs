@@ -84,16 +84,16 @@ pub struct VoiceClient {
 
 impl VoiceClient {
     /// Create a new VoiceClient with all channels initialized
-    pub fn new() -> Result<Self, VoiceClientError> {
+    /// sample_rate: target output sample rate for the decoder (should match audio device)
+    pub fn new(sample_rate: u32) -> Result<Self, VoiceClientError> {
         // Create TCP channels
         let (request_tx, request_rx) = unbounded();
         let (response_tx, response_rx) = unbounded();
         let (event_tx, event_rx) = unbounded();
 
-        // Create decoder
-        // TODO: wrong, it should not be hardcoded
+        // Create decoder with specified sample rate
         let decoder = Arc::new(
-            VoiceDecoder::new(48000).map_err(|e| VoiceClientError::SystemError(e.to_string()))?,  // Default to 48kHz
+            VoiceDecoder::new(sample_rate).map_err(|e| VoiceClientError::SystemError(e.to_string()))?,
         );
 
         // Create UDP channels
