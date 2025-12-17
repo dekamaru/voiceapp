@@ -19,6 +19,7 @@ use iced::{
 };
 use std::collections::HashMap;
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 pub struct SettingsPage {
     // Add settings state fields here as needed
@@ -29,7 +30,6 @@ pub struct SettingsPage {
     input_sensitivity: u8,
     input_device_names: Vec<String>,
     input_stream: Option<Stream>,
-    samples_tx: mpsc::Sender<Vec<f32>>,
     voice_level: f32,
 
     // Output
@@ -59,9 +59,6 @@ impl Into<Message> for SettingsPageMessage {
 
 impl SettingsPage {
     pub fn new() -> Self {
-        // Create channel for audio samples (but don't start stream yet)
-        let (samples_tx, _samples_rx) = mpsc::channel(100);
-
         // Get available input devices
         let (input_device_names, input_default_index) = list_input_devices().unwrap_or_else(|e| {
             tracing::warn!("Failed to list input devices: {}", e);
@@ -80,7 +77,6 @@ impl SettingsPage {
             input_sensitivity: 30,
             input_device_names,
             input_stream: None,
-            samples_tx,
             voice_level: 0.0,
             selected_output_device: output_default_index,
             output_device_names,
@@ -91,8 +87,7 @@ impl SettingsPage {
     /// Should be called when settings page is opened
     pub fn start_input_stream(&mut self) -> Task<Message> {
         // Create new channel for samples
-        let (samples_tx, samples_rx) = mpsc::channel(100);
-        self.samples_tx = samples_tx.clone();
+        let (samples_tx, samples_rx) = mpsc::unbounded_channel();
 
         // Create the audio input stream
         match create_input_stream() {
@@ -103,7 +98,7 @@ impl SettingsPage {
                 let rebroadcast_task = Task::perform(
                     async move {
                         while let Some(samples) = stream_rx.recv().await {
-                            if samples_tx.send(samples).await.is_err() {
+                            if samples_tx.send(samples).is_err() {
                                 tracing::warn!("Failed to send samples to persistent channel");
                                 break;
                             }
@@ -119,8 +114,7 @@ impl SettingsPage {
                 );
 
                 // Task to listen to samples and produce messages
-                use tokio_stream::wrappers::ReceiverStream;
-                let samples_stream = ReceiverStream::new(samples_rx);
+                let samples_stream = UnboundedReceiverStream::new(samples_rx);
                 let samples_task = Task::run(samples_stream, |samples| {
                     Message::VoiceInputSamplesReceived(samples)
                 });
