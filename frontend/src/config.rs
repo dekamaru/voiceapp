@@ -1,16 +1,31 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use cpal::traits::{DeviceTrait, HostTrait};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
+    pub audio: AudioConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub address: String,
     pub username: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioConfig {
+    pub input_device: AudioDevice,
+    pub output_device: AudioDevice,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioDevice {
+    pub device_name: String,
+    pub sample_rate: u32,
+    pub channels: u8,
 }
 
 impl ServerConfig {
@@ -21,11 +36,29 @@ impl ServerConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
+        // Audio defaults
+        let host = cpal::default_host();
+        let input_device = host.default_input_device().expect("failed to get default input device");
+        let output_device = host.default_output_device().expect("failed to get default output device");
+
+
         Self {
             server: ServerConfig {
                 address: "".to_string(),
                 username: "".to_string(),
             },
+            audio: AudioConfig {
+                input_device: AudioDevice {
+                    device_name: input_device.name().expect("failed to get input device name").to_string(),
+                    sample_rate: 0,
+                    channels: 1
+                },
+                output_device: AudioDevice {
+                    device_name: output_device.name().expect("failed to get input device name").to_string(),
+                    sample_rate: 0,
+                    channels: 1
+                },
+            }
         }
     }
 }
