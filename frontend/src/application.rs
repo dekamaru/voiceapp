@@ -155,7 +155,7 @@ impl Application {
             }
             Message::ServerEventReceived(VoiceClientEvent::UserJoinedVoice { user_id }) => {
                 // Create output stream for new user in voice
-                if self.voice_client.is_main_user_in_voice() {
+                if self.voice_client.is_in_voice_channel() {
                     if let Err(e) = self.audio_manager.create_stream_for_user(*user_id) {
                         error!("Failed to create output stream for user {}: {}", user_id, e);
                     };
@@ -164,7 +164,7 @@ impl Application {
                 Task::none()
             }
             Message::ServerEventReceived(VoiceClientEvent::UserLeftVoice { user_id }) => {
-                if self.voice_client.is_main_user_in_voice() {
+                if self.voice_client.is_in_voice_channel() {
                     self.audio_manager.remove_stream_for_user(*user_id);
                 }
 
@@ -174,7 +174,7 @@ impl Application {
                 let on_close_task =self.pages.get_mut(&self.current_page).unwrap().on_close();
                 let on_open_task = self.pages.get_mut(pageType).unwrap().on_open();
                 self.current_page = pageType.clone();
-                
+
                 Task::batch([on_close_task, on_open_task])
             }
             _ => Task::none()

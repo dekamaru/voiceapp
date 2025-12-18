@@ -358,9 +358,9 @@ impl VoiceClient {
             .collect()
     }
 
-    pub fn is_main_user_in_voice(&self) -> bool {
+    pub fn is_in_voice_channel(&self) -> bool {
         let state = self.state.blocking_read();
-        state.participants.get(&state.user_id.unwrap_or(0)).map(|info| info.in_voice).unwrap_or(false)
+        state.in_voice_channel
     }
 
     /// Get UDP send channel for AudioManager to forward encoded voice packets

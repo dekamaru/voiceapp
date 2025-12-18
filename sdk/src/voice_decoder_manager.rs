@@ -42,9 +42,16 @@ impl VoiceDecoderManager {
     }
 
     /// Get decoder for a specific user (blocking version for sync contexts)
-    pub fn get_decoder(&self, user_id: u64) -> Option<Arc<VoiceDecoder>> {
-        let decoders = self.decoders.blocking_lock();
-        decoders.get(&user_id).cloned()
+    pub fn get_decoder(&self, user_id: u64) -> Arc<VoiceDecoder> {
+        let mut decoders = self.decoders.blocking_lock();
+        
+        decoders
+            .entry(user_id)
+            .or_insert_with(|| {
+                tracing::info!("Creating decoder for user {}", user_id);
+                Arc::new(VoiceDecoder::new(self.sample_rate).expect("Failed to create decoder"))
+            })
+            .clone()
     }
 
     /// Remove decoder for a user who left

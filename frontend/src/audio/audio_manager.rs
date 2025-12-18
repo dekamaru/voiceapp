@@ -116,8 +116,7 @@ impl AudioManager {
         info!("Creating output stream for user {}", user_id);
 
         // Get decoder for this user
-        let decoder = self.decoder_manager.get_decoder(user_id)
-            .ok_or_else(|| format!("No decoder found for user {}", user_id))?;
+        let decoder = self.decoder_manager.get_decoder(user_id);
 
         // Create output stream for this user's decoder
         let (output_handle, detected_rate) = create_output_stream(decoder)?;
