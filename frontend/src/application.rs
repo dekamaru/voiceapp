@@ -96,7 +96,7 @@ impl Application {
         let mut pages = HashMap::<PageType, Box<dyn Page>>::from([
             (PageType::Login, Box::new(LoginPage::new(config.clone())) as Box<dyn Page>),
             (PageType::Room, Box::new(RoomPage::new()) as Box<dyn Page>),
-            (PageType::Settings, Box::new(SettingsPage::new()) as Box<dyn Page>)
+            (PageType::Settings, Box::new(SettingsPage::new(config.clone())) as Box<dyn Page>)
         ]);
 
         let on_open_task = pages.get_mut(&PageType::Login).unwrap().on_open();

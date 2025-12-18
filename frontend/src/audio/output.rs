@@ -245,58 +245,9 @@ fn fill_output(
     }
 }
 
-/// List all available output devices
-/// Returns (device_names, default_device_index)
-pub fn list_output_devices() -> Result<(Vec<String>, usize), Box<dyn std::error::Error>> {
+pub fn list_output_devices() -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let host = cpal::default_host();
+    let devices = host.output_devices()?;
 
-    // Get all output devices
-    let devices: Vec<Device> = host.output_devices()?.collect();
-
-    if devices.is_empty() {
-        return Err("No output devices found".into());
-    }
-
-    // Get device names and log supported configs
-    let mut device_names = Vec::new();
-    for device in &devices {
-        if let Ok(name) = device.name() {
-            info!("Output device: {}", name);
-
-            // Log all supported configs for this device
-            if let Ok(configs) = device.supported_output_configs() {
-                for config in configs {
-                    info!(
-                        "  Config: {} channels, {}-{} Hz, {:?}",
-                        config.channels(),
-                        config.min_sample_rate().0,
-                        config.max_sample_rate().0,
-                        config.sample_format()
-                    );
-                }
-            } else {
-                warn!("  Failed to query supported configs");
-            }
-
-            device_names.push(name);
-        }
-    }
-
-    // Find default device index
-    let default_device = host.default_output_device();
-    let default_index = if let Some(default_dev) = default_device {
-        if let Ok(default_name) = default_dev.name() {
-            info!("Default output device: {}", default_name);
-            device_names
-                .iter()
-                .position(|name| name == &default_name)
-                .unwrap_or(0)
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-
-    Ok((device_names, default_index))
+    Ok(devices.map(|d| d.name().unwrap_or("unknown".to_string())).collect())
 }

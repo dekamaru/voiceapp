@@ -10,6 +10,7 @@ use iced::widget::{button, container, row, space, stack, text, text_input, Space
 use iced::{border, Background, Border, Color, Element, Font, Length, Padding, Task};
 use std::sync::{Arc, RwLock};
 use tracing::{debug, info};
+use crate::config::AppConfig;
 
 #[derive(Default)]
 pub struct LoginPage {
@@ -33,7 +34,7 @@ impl Into<Message> for LoginPageMessage {
 }
 
 impl LoginPage {
-    pub fn new(config: Arc<RwLock<crate::config::AppConfig>>) -> Self {
+    pub fn new(config: Arc<RwLock<AppConfig>>) -> Self {
         let config = config.read().unwrap();
 
         let mut page = Self {

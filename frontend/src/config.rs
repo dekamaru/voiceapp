@@ -20,6 +20,7 @@ pub struct ServerConfig {
 pub struct AudioConfig {
     pub input_device: AudioDevice,
     pub output_device: AudioDevice,
+    pub input_sensitivity: u8
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +58,7 @@ impl Default for AppConfig {
                     sample_format: input_stream_config.1.to_string(),
                     channels: input_stream_config.2
                 },
+                input_sensitivity: 30,
                 output_device: AudioDevice {
                     device_name: output_device.name().expect("failed to get input device name").to_string(),
                     sample_rate: output_stream_config.0.0,

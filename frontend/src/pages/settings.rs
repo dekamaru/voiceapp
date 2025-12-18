@@ -18,29 +18,32 @@ use iced::{
     Theme,
 };
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::error;
+use crate::config::AppConfig;
 
 pub struct SettingsPage {
     // Add settings state fields here as needed
     radio_hover_indexes: HashMap<String, usize>,
 
     // Input
-    selected_input_device: usize,
+    selected_input_device_name: String,
     input_sensitivity: u8,
     input_device_names: Vec<String>,
     input_stream: Option<Stream>,
     voice_level: f32,
 
     // Output
-    selected_output_device: usize,
+    selected_output_device_name: String,
     output_device_names: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub enum SettingsPageMessage {
-    SelectInputDevice(usize),
-    SelectOutputDevice(usize),
+    SelectInputDevice(String),
+    SelectOutputDevice(String),
 
     InputSensitivityChanged(u8),
 
@@ -58,34 +61,35 @@ impl Into<Message> for SettingsPageMessage {
 }
 
 impl SettingsPage {
-    pub fn new() -> Self {
-        // Get available input devices
-        let (input_device_names, input_default_index) = list_input_devices().unwrap_or_else(|e| {
-            tracing::warn!("Failed to list input devices: {}", e);
-            (vec!["No devices available".to_string()], 0)
+    pub fn new(config: Arc<RwLock<AppConfig>>) -> Self {
+        let config = config.read().unwrap();
+
+        let input_device_names = list_input_devices().unwrap_or_else(|e| {
+            error!("Failed to list input devices: {}", e);
+            vec!["No devices available".to_string()]
         });
 
         // Get available output devices
-        let (output_device_names, output_default_index) = list_output_devices().unwrap_or_else(|e| {
-            tracing::warn!("Failed to list output devices: {}", e);
-            (vec!["No devices available".to_string()], 0)
+        let output_device_names = list_output_devices().unwrap_or_else(|e| {
+            error!("Failed to list output devices: {}", e);
+            vec!["No devices available".to_string()]
         });
 
         Self {
             radio_hover_indexes: HashMap::new(),
-            selected_input_device: input_default_index,
-            input_sensitivity: 30,
+            selected_input_device_name: config.audio.input_device.device_name.clone(),
+            input_sensitivity: config.audio.input_sensitivity,
             input_device_names,
             input_stream: None,
             voice_level: 0.0,
-            selected_output_device: output_default_index,
+            selected_output_device_name: config.audio.output_device.device_name.clone(),
             output_device_names,
         }
     }
 
     /// Starts the input stream and returns task that produces VoiceInputSamplesReceived messages
     /// Should be called when settings page is opened
-    pub fn start_input_stream(&mut self) -> Task<Message> {
+    fn start_input_stream(&mut self) -> Task<Message> {
         // Create new channel for samples
         let (samples_tx, samples_rx) = mpsc::unbounded_channel();
 
@@ -107,7 +111,7 @@ impl SettingsPage {
                     },
                     |result| {
                         if let Err(ref e) = result {
-                            tracing::error!("Stream rebroadcast error: {}", e);
+                            error!("Stream rebroadcast error: {}", e);
                         }
                         SettingsPageMessage::InputStreamCreated(result).into()
                     },
@@ -123,7 +127,7 @@ impl SettingsPage {
                 Task::batch(vec![rebroadcast_task, samples_task])
             }
             Err(e) => {
-                tracing::error!("Failed to create input stream: {}", e);
+                error!("Failed to create input stream: {}", e);
                 Task::none()
             }
         }
@@ -132,12 +136,12 @@ impl SettingsPage {
     fn input_radio<'a, T>(
         &self,
         values: &'a [T],
-        selected_index: usize,
+        selected_value: T,
         group_name: &'a str,
-        on_select: fn(usize) -> SettingsPageMessage,
+        on_select: fn(&T) -> SettingsPageMessage,
     ) -> iced::widget::Column<'a, Message, Theme, Renderer>
     where
-        T: std::fmt::Display + 'a,
+        T: std::fmt::Display + 'a + std::cmp::PartialEq,
     {
         // Define styling functions
         let top_style = |_theme: &Theme| Style {
@@ -248,7 +252,7 @@ impl SettingsPage {
             };
 
             // Create circle
-            let circle = make_circle(index, index == selected_index);
+            let circle = make_circle(index, value == &selected_value);
 
             // Create content row
             let content = row!(
@@ -268,7 +272,7 @@ impl SettingsPage {
                         .width(Length::Fill)
                         .height(52),
                 )
-                .on_press(on_select(index).into())
+                .on_press(on_select(value).into())
                 .style(|_theme: &Theme, _status: Status| button::Style {
                     text_color: text_primary(),
                     ..button::Style::default()
@@ -289,7 +293,7 @@ impl SettingsPage {
     }
 
     /// Stops the input stream
-    pub fn stop_input_stream(&mut self) {
+    fn stop_input_stream(&mut self) {
         self.input_stream = None;
         tracing::info!("Input stream stopped");
     }
@@ -319,9 +323,9 @@ impl SettingsPage {
 
         let input_device_select = self.input_radio(
             &self.input_device_names,
-            self.selected_input_device,
+            self.selected_input_device_name.clone(),
             "input_device",
-            SettingsPageMessage::SelectInputDevice,
+            |v| SettingsPageMessage::SelectInputDevice(v.clone()),
         );
 
         let input_device = column!(
@@ -332,9 +336,9 @@ impl SettingsPage {
 
         let output_device_select = self.input_radio(
             &self.output_device_names,
-            self.selected_output_device,
+            self.selected_output_device_name.clone(),
             "output_device",
-            SettingsPageMessage::SelectOutputDevice,
+            |v| SettingsPageMessage::SelectOutputDevice(v.clone()),
         );
 
         let output_device = column!(
@@ -404,15 +408,15 @@ impl Page for SettingsPage {
             Message::SettingsPage(settings_message) => {
                 match settings_message {
                     // Handle settings messages here
-                    SettingsPageMessage::SelectInputDevice(index) => {
-                        self.selected_input_device = index;
+                    SettingsPageMessage::SelectInputDevice(name) => {
+                        self.selected_input_device_name = name;
 
                         // Recreate input stream with new device
                         self.stop_input_stream();
                         return self.start_input_stream();
                     }
-                    SettingsPageMessage::SelectOutputDevice(index) => {
-                        self.selected_output_device = index;
+                    SettingsPageMessage::SelectOutputDevice(name) => {
+                        self.selected_output_device_name = name;
                     }
                     SettingsPageMessage::RadioHoverEnter(group, index) => {
                         self.radio_hover_indexes.insert(group, index);
@@ -432,7 +436,7 @@ impl Page for SettingsPage {
                             tracing::info!("Input stream task completed");
                         }
                         Err(e) => {
-                            tracing::error!("Input stream task error: {}", e);
+                            error!("Input stream task error: {}", e);
                         }
                     },
                 }
