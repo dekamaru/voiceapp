@@ -182,3 +182,10 @@ pub fn list_input_devices() -> Result<Vec<String>, Box<dyn std::error::Error>> {
 
     Ok(devices.map(|d| d.name().unwrap_or("unknown".to_string())).collect())
 }
+
+pub fn find_input_device_by_name(name: String) -> Result<Option<Device>, Box<dyn std::error::Error>> {
+    let host = cpal::default_host();
+    let mut devices = host.input_devices()?;
+
+    Ok(devices.find(|d| d.name().unwrap_or("unknown".to_string()) == name))
+}

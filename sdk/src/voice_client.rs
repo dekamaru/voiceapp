@@ -1,13 +1,12 @@
 use async_channel::{unbounded, Receiver, Sender};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
 use voiceapp_protocol::{PacketId, ParticipantInfo};
+use crate::tcp_client::TcpClient;
 use crate::voice_decoder_manager::VoiceDecoderManager;
 
 /// Errors that can occur with VoiceClient
@@ -67,12 +66,7 @@ struct ClientState {
 /// The VoiceClient for managing voice connections
 pub struct VoiceClient {
     state: Arc<RwLock<ClientState>>,
-    request_tx: Sender<Vec<u8>>,
-    request_rx: Receiver<Vec<u8>>,
-    response_tx: Sender<(PacketId, Vec<u8>)>,
-    response_rx: Receiver<(PacketId, Vec<u8>)>,
-    event_tx: Sender<(PacketId, Vec<u8>)>,
-    event_rx: Receiver<(PacketId, Vec<u8>)>,
+    tcp_client: TcpClient,
     decoder_manager: Arc<VoiceDecoderManager>,
     udp_send_tx: Sender<Vec<u8>>,
     udp_send_rx: Receiver<Vec<u8>>,
@@ -86,10 +80,8 @@ impl VoiceClient {
     /// Create a new VoiceClient with all channels initialized
     /// sample_rate: target output sample rate for the decoder (should match audio device)
     pub fn new(output_sample_rate: u32) -> Result<Self, VoiceClientError> {
-        // Create TCP channels
-        let (request_tx, request_rx) = unbounded();
-        let (response_tx, response_rx) = unbounded();
-        let (event_tx, event_rx) = unbounded();
+        // Create TCP client
+        let tcp_client = TcpClient::new();
 
         // Create decoder manager with specified sample rate
         let decoder_manager = Arc::new(VoiceDecoderManager::new(output_sample_rate));
@@ -109,12 +101,7 @@ impl VoiceClient {
                 participants: HashMap::new(),
                 in_voice_channel: false,
             })),
-            request_tx,
-            request_rx,
-            response_tx,
-            response_rx,
-            event_tx,
-            event_rx,
+            tcp_client,
             decoder_manager,
             udp_send_tx,
             udp_send_rx,
@@ -138,12 +125,12 @@ impl VoiceClient {
         username: &str,
     ) -> Result<(), VoiceClientError> {
         // Connect TCP socket
-        let tcp_socket = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(management_server_addr))
-            .await
-            .map_err(|_| VoiceClientError::ConnectionFailed("Operation timed out".to_string()))?  // Handle timeout
-            .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;  // Handle connection error
+        self.tcp_client.connect(management_server_addr).await?;
 
         info!("[Management server] Connected to {}", management_server_addr);
+
+        // Subscribe to TCP event stream and spawn processor
+        self.spawn_tcp_event_processor();
 
         // Create UDP socket (bind to any available port)
         let udp_socket = UdpSocket::bind("0.0.0.0:0")
@@ -157,23 +144,18 @@ impl VoiceClient {
 
         info!("[Voice server] Connected to {}", voice_server_addr);
 
-        // Spawn background tasks
-        self.spawn_tcp_handler(tcp_socket);
+        // Spawn UDP handler
         self.spawn_udp_handler(udp_socket);
-        self.spawn_event_processor();
 
         // Authenticate
         debug!("Authenticating as '{}'", username);
 
         // TCP authentication
-        self.request_tx
-            .send(voiceapp_protocol::encode_login_request(username))
-            .await
-            .map_err(|_| VoiceClientError::Disconnected)?;
         let response = self
-            .wait_for_response_with(
+            .tcp_client
+            .send_request_with_response(
+                voiceapp_protocol::encode_login_request(username),
                 PacketId::LoginResponse,
-                5,
                 voiceapp_protocol::decode_login_response,
             )
             .await?;
@@ -265,22 +247,12 @@ impl VoiceClient {
     pub async fn join_channel(&self) -> Result<(), VoiceClientError> {
         debug!("Joining voice channel");
 
-        // Encode and send JoinVoiceChannelRequest
-        let payload = voiceapp_protocol::encode_join_voice_channel_request();
-
-        self.request_tx
-            .send(payload)
-            .await
-            .map_err(|_| VoiceClientError::Disconnected)?;
-
-        // Wait for response
-        let _success = self
-            .wait_for_response_with(
-                PacketId::JoinVoiceChannelResponse,
-                5,
-                voiceapp_protocol::decode_join_voice_channel_response,
-            )
-            .await?;
+        // Send request and wait for response
+        self.tcp_client.send_request(
+            voiceapp_protocol::encode_join_voice_channel_request(),
+            PacketId::JoinVoiceChannelResponse,
+        )
+        .await?;
 
         // Update client state
         let mut state = self.state.write().await;
@@ -293,22 +265,12 @@ impl VoiceClient {
     pub async fn leave_channel(&self) -> Result<(), VoiceClientError> {
         debug!("Leaving voice channel");
 
-        // Encode and send LeaveVoiceChannelRequest
-        let payload = voiceapp_protocol::encode_leave_voice_channel_request();
-
-        self.request_tx
-            .send(payload)
-            .await
-            .map_err(|_| VoiceClientError::Disconnected)?;
-
-        // Wait for response
-        let _success = self
-            .wait_for_response_with(
-                PacketId::LeaveVoiceChannelResponse,
-                5,
-                voiceapp_protocol::decode_leave_voice_channel_response,
-            )
-            .await?;
+        // Send request and wait for response
+        self.tcp_client.send_request(
+            voiceapp_protocol::encode_leave_voice_channel_request(),
+            PacketId::LeaveVoiceChannelResponse,
+        )
+        .await?;
 
         // Update client state
         let mut state = self.state.write().await;
@@ -321,22 +283,12 @@ impl VoiceClient {
     pub async fn send_message(&self, message: &str) -> Result<(), VoiceClientError> {
         debug!("Sending chat message");
 
-        // Encode and send ChatMessageRequest
-        let payload = voiceapp_protocol::encode_chat_message_request(message);
-
-        self.request_tx
-            .send(payload)
-            .await
-            .map_err(|_| VoiceClientError::Disconnected)?;
-
-        // Wait for response
-        let _success = self
-            .wait_for_response_with(
-                PacketId::ChatMessageResponse,
-                5,
-                voiceapp_protocol::decode_chat_message_response,
-            )
-            .await?;
+        // Send request and wait for response
+        self.tcp_client.send_request(
+            voiceapp_protocol::encode_chat_message_request(message),
+            PacketId::ChatMessageResponse,
+        )
+        .await?;
 
         debug!("Chat message sent successfully");
         Ok(())
@@ -368,43 +320,134 @@ impl VoiceClient {
         self.udp_send_tx.clone()
     }
 
-    /// Spawn event processor task (called internally from connect)
-    fn spawn_event_processor(&self) {
+    /// Spawn TCP event processor task
+    fn spawn_tcp_event_processor(&self) {
+        let tcp_event_rx = self.tcp_client.event_stream();
         let state = Arc::clone(&self.state);
-        let event_rx = self.event_rx.clone();
         let client_events_tx = self.client_events_tx.clone();
         let decoder_manager = self.decoder_manager.clone();
 
         tokio::spawn(async move {
             loop {
-                match event_rx.recv().await {
+                match tcp_event_rx.recv().await {
                     Ok((packet_id, payload)) => {
-                        if let Err(e) =
-                            Self::handle_event(&state, packet_id, payload, &client_events_tx, &decoder_manager).await
-                        {
+                        // Handle event based on packet type
+                        let result = match packet_id {
+                            PacketId::UserJoinedServer => {
+                                match voiceapp_protocol::decode_user_joined_server(&payload) {
+                                    Ok((user_id, username)) => {
+                                        let mut s = state.write().await;
+                                        s.participants.insert(
+                                            user_id,
+                                            ParticipantInfo {
+                                                user_id,
+                                                username: username.clone(),
+                                                in_voice: false,
+                                            },
+                                        );
+                                        drop(s);
+
+                                        let _ = client_events_tx
+                                            .send(VoiceClientEvent::UserJoinedServer { user_id, username })
+                                            .await;
+
+                                        debug!("User joined server: id={}", user_id);
+                                        Ok(())
+                                    }
+                                    Err(e) => Err(format!("Decode error: {}", e)),
+                                }
+                            }
+                            PacketId::UserLeftServer => {
+                                match voiceapp_protocol::decode_user_left_server(&payload) {
+                                    Ok(user_id) => {
+                                        let mut s = state.write().await;
+                                        s.participants.remove(&user_id);
+                                        drop(s);
+
+                                        let _ = client_events_tx
+                                            .send(VoiceClientEvent::UserLeftServer { user_id })
+                                            .await;
+
+                                        debug!("User left server: id={}", user_id);
+                                        Ok(())
+                                    }
+                                    Err(e) => Err(format!("Decode error: {}", e)),
+                                }
+                            }
+                            PacketId::UserJoinedVoice => {
+                                match voiceapp_protocol::decode_user_joined_voice(&payload) {
+                                    Ok(user_id) => {
+                                        let mut s = state.write().await;
+                                        if let Some(participant) = s.participants.get_mut(&user_id) {
+                                            participant.in_voice = true;
+                                        }
+                                        drop(s);
+
+                                        let _ = client_events_tx
+                                            .send(VoiceClientEvent::UserJoinedVoice { user_id })
+                                            .await;
+
+                                        debug!("User joined voice: id={}", user_id);
+                                        Ok(())
+                                    }
+                                    Err(e) => Err(format!("Decode error: {}", e)),
+                                }
+                            }
+                            PacketId::UserLeftVoice => {
+                                match voiceapp_protocol::decode_user_left_voice(&payload) {
+                                    Ok(user_id) => {
+                                        // Remove decoder for user who left
+                                        decoder_manager.remove_user(user_id).await;
+
+                                        let mut s = state.write().await;
+                                        if let Some(participant) = s.participants.get_mut(&user_id) {
+                                            participant.in_voice = false;
+                                        }
+                                        drop(s);
+
+                                        let _ = client_events_tx
+                                            .send(VoiceClientEvent::UserLeftVoice { user_id })
+                                            .await;
+
+                                        debug!("User left voice: id={}", user_id);
+                                        Ok(())
+                                    }
+                                    Err(e) => Err(format!("Decode error: {}", e)),
+                                }
+                            }
+                            PacketId::UserSentMessage => {
+                                match voiceapp_protocol::decode_user_sent_message(&payload) {
+                                    Ok((user_id, timestamp, message)) => {
+                                        let _ = client_events_tx
+                                            .send(VoiceClientEvent::UserSentMessage {
+                                                user_id,
+                                                timestamp,
+                                                message: message.clone(),
+                                            })
+                                            .await;
+
+                                        debug!("User sent message: id={}, timestamp={}", user_id, timestamp);
+                                        Ok(())
+                                    }
+                                    Err(e) => Err(format!("Decode error: {}", e)),
+                                }
+                            }
+                            _ => {
+                                // Ignore non-event packets
+                                debug!("Received non-event packet in event stream: {:?}", packet_id);
+                                Ok(())
+                            }
+                        };
+
+                        if let Err(e) = result {
                             error!("Event handling error: {}", e);
-                            break;
                         }
                     }
                     Err(_) => {
-                        debug!("Event stream closed");
+                        debug!("TCP event stream closed");
                         break;
                     }
                 }
-            }
-        });
-    }
-
-    /// Spawn TCP handler task (called internally from connect)
-    fn spawn_tcp_handler(&self, socket: TcpStream) {
-        let request_tx = self.request_tx.clone();
-        let request_rx = self.request_rx.clone();
-        let response_tx = self.response_tx.clone();
-        let event_tx = self.event_tx.clone();
-
-        tokio::spawn(async move {
-            if let Err(e) = tcp_handler(socket, request_rx, response_tx, event_tx).await {
-                error!("TCP handler error: {}", e);
             }
         });
     }
@@ -416,258 +459,57 @@ impl VoiceClient {
         let decoder_manager = self.decoder_manager.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = udp_handler(socket, send_rx, recv_tx, decoder_manager).await {
-                error!("UDP handler error: {}", e);
-            }
-        });
-    }
+            let mut read_buf = [0u8; 4096];
 
-    /// Handle a single event and update state
-    async fn handle_event(
-        state: &Arc<RwLock<ClientState>>,
-        packet_id: PacketId,
-        payload: Vec<u8>,
-        client_events_tx: &Sender<VoiceClientEvent>,
-        decoder_manager: &Arc<VoiceDecoderManager>,
-    ) -> Result<(), VoiceClientError> {
-        match packet_id {
-            PacketId::UserJoinedServer => {
-                let (user_id, username) = voiceapp_protocol::decode_user_joined_server(&payload)
-                    .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
-
-                let mut s = state.write().await;
-                s.participants.insert(
-                    user_id,
-                    ParticipantInfo {
-                        user_id,
-                        username: username.clone(),
-                        in_voice: false,
-                    },
-                );
-                drop(s); // Release lock before sending event
-
-                let _ = client_events_tx
-                    .send(VoiceClientEvent::UserJoinedServer { user_id, username })
-                    .await;
-
-                debug!("User joined server: id={}", user_id);
-                Ok(())
-            }
-            PacketId::UserLeftServer => {
-                let user_id = voiceapp_protocol::decode_user_left_server(&payload)
-                    .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
-
-                let mut s = state.write().await;
-                s.participants.remove(&user_id);
-                drop(s); // Release lock before sending event
-
-                let _ = client_events_tx
-                    .send(VoiceClientEvent::UserLeftServer { user_id })
-                    .await;
-
-                debug!("User left server: id={}", user_id);
-                Ok(())
-            }
-            PacketId::UserJoinedVoice => {
-                let user_id = voiceapp_protocol::decode_user_joined_voice(&payload)
-                    .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
-
-                let mut s = state.write().await;
-                if let Some(participant) = s.participants.get_mut(&user_id) {
-                    participant.in_voice = true;
-                }
-                drop(s); // Release lock before sending event
-
-                let _ = client_events_tx
-                    .send(VoiceClientEvent::UserJoinedVoice { user_id })
-                    .await;
-
-                debug!("User joined voice: id={}", user_id);
-                Ok(())
-            }
-            PacketId::UserLeftVoice => {
-                let user_id = voiceapp_protocol::decode_user_left_voice(&payload)
-                    .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
-
-                // Remove decoder for user who left
-                decoder_manager.remove_user(user_id).await;
-
-                let mut s = state.write().await;
-                if let Some(participant) = s.participants.get_mut(&user_id) {
-                    participant.in_voice = false;
-                }
-                drop(s); // Release lock before sending event
-
-                let _ = client_events_tx
-                    .send(VoiceClientEvent::UserLeftVoice { user_id })
-                    .await;
-
-                debug!("User left voice: id={}", user_id);
-                Ok(())
-            }
-            PacketId::UserSentMessage => {
-                let (user_id, timestamp, message) =
-                    voiceapp_protocol::decode_user_sent_message(&payload)
-                        .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
-
-                let _ = client_events_tx
-                    .send(VoiceClientEvent::UserSentMessage {
-                        user_id,
-                        timestamp,
-                        message: message.clone(),
-                    })
-                    .await;
-
-                debug!("User sent message: id={}, timestamp={}", user_id, timestamp);
-                Ok(())
-            }
-            _ => {
-                debug!("Ignoring unexpected event: {:?}", packet_id);
-                Ok(())
-            }
-        }
-    }
-
-    /// Wait for a response packet, decode it, and handle timeout with custom timeout
-    async fn wait_for_response_with<T, F>(
-        &self,
-        expected_id: PacketId,
-        timeout_secs: u64,
-        decoder: F,
-    ) -> Result<T, VoiceClientError>
-    where
-        F: Fn(&[u8]) -> std::io::Result<T>,
-    {
-        let timeout = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
             loop {
-                match self.response_rx.recv().await {
-                    Ok((packet_id, payload)) => {
-                        if packet_id == expected_id {
-                            return Ok(payload);
+                tokio::select! {
+                    // Handle outgoing packets
+                    result = send_rx.recv() => {
+                        match result {
+                            Ok(packet) => {
+                                if let Err(e) = socket.send(&packet).await {
+                                    error!("UDP handler error: {}", e);
+                                    break;
+                                }
+                                // TODO: packet.len() for bytes sent
+                            }
+                            Err(_) => {
+                                error!("UDP handler error: Send channel closed");
+                                break;
+                            }
                         }
                     }
-                    Err(_) => return Err(VoiceClientError::Disconnected),
+
+                    // Handle incoming packets
+                    Ok(n) = socket.recv(&mut read_buf) => {
+                        if n == 0 {
+                            debug!("UDP socket closed");
+                            break;
+                        }
+
+                        // Parse incoming packet
+                        match voiceapp_protocol::parse_packet(&read_buf[..n]) {
+                            Ok((packet_id, payload)) => {
+                                // Decode voice data packets
+                                if packet_id == PacketId::VoiceData {
+                                    if let Ok(voice_packet) = voiceapp_protocol::decode_voice_data(&payload) {
+                                        if let Err(e) = decoder_manager.insert_packet(voice_packet).await {
+                                            debug!("Failed to insert voice packet: {}", e);
+                                        }
+                                    }
+                                } else {
+                                    // Route non-voice packets to receiver
+                                    let _ = recv_tx.send((packet_id, payload.to_vec())).await;
+                                }
+                            }
+                            Err(e) => {
+                                error!("UDP handler error: {}", e);
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         });
-
-        match timeout.await {
-            Ok(Ok(payload)) => {
-                decoder(&payload).map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))
-            }
-            Ok(Err(e)) => Err(e),
-            Err(_) => Err(VoiceClientError::Timeout(format!(
-                "packet {}",
-                expected_id.as_u8()
-            ))),
-        }
     }
-}
-
-/// TCP handler task that multiplexes between requests and server responses
-async fn tcp_handler(
-    mut socket: TcpStream,
-    request_rx: Receiver<Vec<u8>>,
-    response_tx: Sender<(PacketId, Vec<u8>)>,
-    event_tx: Sender<(PacketId, Vec<u8>)>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut read_buf = [0u8; 4096];
-
-    loop {
-        tokio::select! {
-            // Handle outgoing requests (already fully encoded)
-            result = request_rx.recv() => {
-                match result {
-                    Ok(packet) => { socket.write_all(&packet).await? }
-                    Err(_) => return Err("Request channel closed".into()),
-                }
-            }
-
-            // Handle incoming responses/events
-            n = socket.read(&mut read_buf) => {
-                let n = n?;
-                if n == 0 {
-                    return Err("Connection closed by server".into());
-                }
-
-                // Parse incoming packet
-                let (packet_id, payload) = voiceapp_protocol::parse_packet(&read_buf[..n])?;
-                debug!("Received packet: {:?}", packet_id);
-
-                // Route to appropriate channel
-                match packet_id {
-                    // Responses (0x11-0x15)
-                    PacketId::LoginResponse
-                    | PacketId::VoiceAuthResponse
-                    | PacketId::JoinVoiceChannelResponse
-                    | PacketId::LeaveVoiceChannelResponse
-                    | PacketId::ChatMessageResponse => {
-                        response_tx.send((packet_id, payload.to_vec())).await?;
-                    }
-                    // Events (0x21-0x25)
-                    PacketId::UserJoinedServer
-                    | PacketId::UserJoinedVoice
-                    | PacketId::UserLeftVoice
-                    | PacketId::UserLeftServer
-                    | PacketId::UserSentMessage => {
-                        let _ = event_tx.send((packet_id, payload.to_vec())).await;
-                    }
-                    // Unexpected packets
-                    _ => {
-                        debug!("Ignoring unexpected packet: {:?}", packet_id);
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// UDP handler task for voice data and auth
-async fn udp_handler(
-    socket: UdpSocket,
-    send_rx: Receiver<Vec<u8>>,
-    recv_tx: Sender<(PacketId, Vec<u8>)>,
-    decoder_manager: Arc<VoiceDecoderManager>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut read_buf = [0u8; 4096];
-
-    loop {
-        tokio::select! {
-            // Handle outgoing packets
-            result = send_rx.recv() => {
-                match result {
-                    Ok(packet) => {
-                        socket.send(&packet).await?;
-                        // TODO: packet.len() for bytes sent
-                    }
-                    Err(_) => return Err("Send channel closed".into()),
-                }
-            }
-
-            // Handle incoming packets
-            Ok(n) = socket.recv(&mut read_buf) => {
-                if n == 0 {
-                    debug!("UDP socket closed");
-                    break;
-                }
-
-                // Parse incoming packet
-                let (packet_id, payload) = voiceapp_protocol::parse_packet(&read_buf[..n])?;
-
-                // Decode voice data packets
-                if packet_id == PacketId::VoiceData {
-                    if let Ok(voice_packet) = voiceapp_protocol::decode_voice_data(&payload) {
-                        if let Err(e) = decoder_manager.insert_packet(voice_packet).await {
-                            debug!("Failed to insert voice packet: {}", e);
-                        }
-                    }
-                } else {
-                    // Route non-voice packets to receiver
-                    let _ = recv_tx.send((packet_id, payload.to_vec())).await;
-                }
-            }
-        }
-    }
-
-    Ok(())
 }

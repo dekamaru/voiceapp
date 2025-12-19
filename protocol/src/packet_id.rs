@@ -3,7 +3,7 @@
 use std::io;
 
 /// Unified packet ID space for all packet types (requests, responses, events)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PacketId {
     // Requests (0x01-0x10)
     LoginRequest = 0x01,

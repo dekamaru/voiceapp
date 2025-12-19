@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::audio::AudioManager;
+use crate::audio::{find_best_input_stream_config, find_input_device_by_name, AudioManager};
 use crate::pages::login::{LoginPage, LoginPageMessage};
 use crate::pages::room::{RoomPage, RoomPageMessage};
 use crate::pages::settings::{SettingsPage, SettingsPageMessage};
@@ -170,12 +170,20 @@ impl Application {
 
                 Task::none()
             },
-            Message::SwitchPage(pageType) => {
+            Message::SwitchPage(page_type) => {
                 let on_close_task =self.pages.get_mut(&self.current_page).unwrap().on_close();
-                let on_open_task = self.pages.get_mut(pageType).unwrap().on_open();
-                self.current_page = pageType.clone();
+                let on_open_task = self.pages.get_mut(page_type).unwrap().on_open();
+                self.current_page = page_type.clone();
 
                 Task::batch([on_close_task, on_open_task])
+            }
+            Message::SettingsPage(SettingsPageMessage::SelectInputDevice(device_name)) => {
+                info!("Selected input device: {}", device_name);
+                // let device = find_input_device_by_name(device_name.clone());
+                // let best_config = find_best_input_stream_config(&device);
+                // self.write_config(||)
+
+                Task::none()
             }
             _ => Task::none()
         };

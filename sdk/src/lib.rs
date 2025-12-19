@@ -1,3 +1,4 @@
+pub mod tcp_client;
 pub mod voice_client;
 pub mod voice_decoder;
 pub mod voice_decoder_manager;
