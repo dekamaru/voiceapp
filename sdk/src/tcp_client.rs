@@ -18,31 +18,32 @@ type RequestCallback = (PacketId, oneshot::Sender<Vec<u8>>);
 pub struct TcpClient {
     send_tx: Sender<(Vec<u8>, Option<RequestCallback>)>,
     send_rx: Receiver<(Vec<u8>, Option<RequestCallback>)>,
-    event_tx: Sender<(PacketId, Vec<u8>)>,
-    event_rx: Receiver<(PacketId, Vec<u8>)>,
+    packet_tx: Sender<(PacketId, Vec<u8>)>,
+    packet_rx: Receiver<(PacketId, Vec<u8>)>,
 }
 
 impl TcpClient {
     /// Create a new TcpClient
     pub fn new() -> Self {
         let (send_tx, send_rx) = unbounded();
-        let (event_tx, event_rx) = unbounded();
+        let (packet_tx, packet_rx) = unbounded();
+
         Self {
             send_tx,
             send_rx,
-            event_tx,
-            event_rx,
+            packet_tx,
+            packet_rx,
         }
     }
 
     /// Get a receiver for incoming events
-    pub fn event_stream(&self) -> Receiver<(PacketId, Vec<u8>)> {
-        self.event_rx.clone()
+    pub fn packet_stream(&self) -> Receiver<(PacketId, Vec<u8>)> {
+        self.packet_rx.clone()
     }
 
     /// Connect to TCP server and spawn handler
     pub async fn connect(&self, addr: &str) -> Result<(), VoiceClientError> {
-        let socket = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
+        let socket = tokio::time::timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), TcpStream::connect(addr))
             .await
             .map_err(|_| VoiceClientError::ConnectionFailed("Operation timed out".to_string()))?
             .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))?;
@@ -104,7 +105,7 @@ impl TcpClient {
     /// Spawn TCP handler task
     fn spawn_handler(&self, mut socket: TcpStream) {
         let send_rx = self.send_rx.clone();
-        let event_tx = self.event_tx.clone();
+        let packet_tx = self.packet_tx.clone();
 
         tokio::spawn(async move {
             let mut read_buf = [0u8; 4096];
@@ -131,7 +132,7 @@ impl TcpClient {
                             result,
                             &read_buf,
                             &mut pending_responses,
-                            &event_tx
+                            &packet_tx
                         ).await {
                             Ok(should_continue) => {
                                 if !should_continue {
@@ -154,10 +155,7 @@ impl TcpClient {
     /// Handle outgoing packet
     async fn handle_outgoing(
         socket: &mut TcpStream,
-        recv_result: Result<
-            (Vec<u8>, Option<(PacketId, oneshot::Sender<Vec<u8>>)>),
-            async_channel::RecvError,
-        >,
+        recv_result: Result<(Vec<u8>, Option<RequestCallback>), async_channel::RecvError>,
         pending_responses: &mut HashMap<PacketId, oneshot::Sender<Vec<u8>>>,
     ) -> Result<(), String> {
         match recv_result {
@@ -184,43 +182,27 @@ impl TcpClient {
         read_result: std::io::Result<usize>,
         read_buf: &[u8],
         pending_responses: &mut HashMap<PacketId, oneshot::Sender<Vec<u8>>>,
-        event_tx: &Sender<(PacketId, Vec<u8>)>,
+        packet_tx: &Sender<(PacketId, Vec<u8>)>,
     ) -> Result<bool, String> {
         match read_result {
-            Ok(0) => {
-                // Connection closed
-                Ok(false)
-            }
+            Ok(0) => { Ok(false) }
             Ok(n) => {
-                // Parse packet
                 let (packet_id, payload) = voiceapp_protocol::parse_packet(&read_buf[..n])
                     .map_err(|e| format!("Parse error: {}", e))?;
 
                 debug!("Received TCP packet: {:?}", packet_id);
 
-                Self::route_packet(packet_id, payload, pending_responses, event_tx).await;
+                // Check if this is a pending response
+                if let Some(tx) = pending_responses.remove(&packet_id) {
+                    let _ = tx.send(payload.to_vec());
+                }
+
+                let _ = packet_tx.send((packet_id, payload.to_vec())).await;
 
                 Ok(true)
             }
             Err(e) => Err(format!("Read error: {}", e)),
         }
-    }
-
-    /// Route packet to appropriate handler
-    async fn route_packet(
-        packet_id: PacketId,
-        payload: &[u8],
-        pending_responses: &mut HashMap<PacketId, oneshot::Sender<Vec<u8>>>,
-        event_tx: &Sender<(PacketId, Vec<u8>)>,
-    ) {
-        // Check if this is a pending response
-        if let Some(tx) = pending_responses.remove(&packet_id) {
-            let _ = tx.send(payload.to_vec());
-            return;
-        }
-
-        // Send to event stream (VoiceClient will filter for actual events)
-        let _ = event_tx.send((packet_id, payload.to_vec())).await;
     }
 
     /// Wait for response with timeout
