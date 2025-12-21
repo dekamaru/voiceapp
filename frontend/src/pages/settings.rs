@@ -23,6 +23,7 @@ use tracing::error;
 use crate::config::AppConfig;
 
 pub struct SettingsPage {
+    app_config: Arc<RwLock<AppConfig>>,
     // Add settings state fields here as needed
     radio_hover_indexes: HashMap<String, usize>,
 
@@ -60,7 +61,7 @@ impl Into<Message> for SettingsPageMessage {
 
 impl SettingsPage {
     pub fn new(config: Arc<RwLock<AppConfig>>) -> Self {
-        let config = config.read().unwrap();
+        let audio_config = config.read().unwrap().audio.clone();
 
         let input_device_names = list_input_devices().unwrap_or_else(|e| {
             error!("Failed to list input devices: {}", e);
@@ -74,13 +75,14 @@ impl SettingsPage {
         });
 
         Self {
+            app_config: config.clone(),
             radio_hover_indexes: HashMap::new(),
-            selected_input_device_name: config.audio.input_device.device_name.clone(),
-            input_sensitivity: config.audio.input_sensitivity,
+            selected_input_device_name: audio_config.input_device.device_name.clone(),
+            input_sensitivity: audio_config.input_sensitivity,
             input_device_names,
             input_stream: None,
             voice_level: 0.0,
-            selected_output_device_name: config.audio.output_device.device_name.clone(),
+            selected_output_device_name: audio_config.output_device.device_name.clone(),
             output_device_names,
         }
     }
@@ -91,9 +93,11 @@ impl SettingsPage {
         // Create new channel for samples
         let (samples_tx, samples_rx) = mpsc::unbounded_channel();
 
+        let config = self.app_config.read().unwrap().audio.clone();
+
         // Create the audio input stream
-        match create_input_stream() {
-            Ok((stream, _sample_rate, mut stream_rx)) => {
+        match create_input_stream(config.input_device) {
+            Ok((stream, mut stream_rx)) => {
                 self.input_stream = Some(stream);
 
                 // Task to rebroadcast from stream_rx to persistent samples_tx

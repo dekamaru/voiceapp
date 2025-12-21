@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::audio::{find_input_device_by_name, AudioManager};
+use crate::audio::{find_best_input_stream_config, find_best_output_stream_config, find_input_device_by_name, find_output_device_by_name, AudioManager};
 use crate::pages::login::{LoginPage, LoginPageMessage};
 use crate::pages::room::{RoomPage, RoomPageMessage};
 use crate::pages::settings::{SettingsPage, SettingsPageMessage};
@@ -73,7 +73,6 @@ impl Application {
     pub fn new() -> (Self, Task<Message>) {
         let config = AppConfig::load().unwrap();
         let voice_client = Arc::new(VoiceClient::new().expect("failed to init voice client"));
-        let audio_manager = AudioManager::new(voice_client.clone());
         let events_task = Task::run(voice_client.event_stream(), |e| Message::ServerEventReceived(e));
         let auto_login_task = if config.server.is_credentials_filled() {
             info!("Credentials read from config, performing auto login");
@@ -92,6 +91,7 @@ impl Application {
         };
 
         let config = Arc::new(RwLock::new(config));
+        let audio_manager = AudioManager::new(config.clone(), voice_client.clone());
 
         let mut pages = HashMap::<PageType, Box<dyn Page>>::from([
             (PageType::Login, Box::new(LoginPage::new(config.clone())) as Box<dyn Page>),
@@ -179,9 +179,93 @@ impl Application {
             }
             Message::SettingsPage(SettingsPageMessage::SelectInputDevice(device_name)) => {
                 info!("Selected input device: {}", device_name);
-                // let device = find_input_device_by_name(device_name.clone());
-                // let best_config = find_best_input_stream_config(&device);
-                // self.write_config(||)
+
+                // Try to find device by name
+                let device = match find_input_device_by_name(device_name.clone()) {
+                    Ok(Some(dev)) => dev,
+                    Ok(None) => {
+                        // TODO: refresh device list message
+                        error!("Device '{}' not found", device_name);
+                        return Task::none();
+                    }
+                    Err(e) => {
+                        error!("Failed to find device '{}': {}", device_name, e);
+                        return Task::none();
+                    }
+                };
+
+                // Try to get best config for the device
+                let best_config = match find_best_input_stream_config(&device) {
+                    Ok(config) => config,
+                    Err(e) => {
+                        error!("Failed to get config for device '{}': {}", device_name, e);
+                        return Task::none();
+                    }
+                };
+
+                // Only write config if everything succeeded
+                self.write_config(|config| {
+                    config.audio.input_device.device_name = device_name.clone();
+                    config.audio.input_device.sample_rate = best_config.0.0;
+                    config.audio.input_device.sample_format = best_config.1.to_string();
+                    config.audio.input_device.channels = best_config.2;
+                });
+
+                // Refresh input in case if it's changed
+                if self.voice_client.is_in_voice_channel() {
+                    self.audio_manager.stop_recording();
+                    // TODO: error handling
+                    let _ = self.audio_manager.start_recording();
+                }
+
+                Task::none()
+            },
+            Message::SettingsPage(SettingsPageMessage::SelectOutputDevice(device_name)) => {
+                info!("Selected output device: {}", device_name);
+
+                // Try to find device by name
+                let device = match find_output_device_by_name(device_name.clone()) {
+                    Ok(Some(dev)) => dev,
+                    Ok(None) => {
+                        // TODO: refresh device list message
+                        error!("Device '{}' not found", device_name);
+                        return Task::none();
+                    }
+                    Err(e) => {
+                        error!("Failed to find device '{}': {}", device_name, e);
+                        return Task::none();
+                    }
+                };
+
+                // Try to get best config for the device
+                let best_config = match find_best_output_stream_config(&device) {
+                    Ok(config) => config,
+                    Err(e) => {
+                        error!("Failed to get config for device '{}': {}", device_name, e);
+                        return Task::none();
+                    }
+                };
+
+                // Only write config if everything succeeded
+                self.write_config(|config| {
+                    config.audio.output_device.device_name = device_name.clone();
+                    config.audio.output_device.sample_rate = best_config.0.0;
+                    config.audio.output_device.sample_format = best_config.1.to_string();
+                    config.audio.output_device.channels = best_config.2;
+                });
+
+                // Refresh input in case if it's changed
+                if self.voice_client.is_in_voice_channel() {
+                    self.audio_manager.remove_all_output_streams();
+
+                    let users_in_voice = self.voice_client.get_users_in_voice();
+                    // Create output streams for all users currently in voice
+                    for user_id in users_in_voice {
+                        if let Err(e) = self.audio_manager.create_output_stream_for_user(user_id) {
+                            error!("Failed to create output stream for user {}: {}", user_id, e);
+                        }
+                    };
+                }
 
                 Task::none()
             }

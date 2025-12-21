@@ -1,20 +1,13 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, SampleRate, Stream, StreamConfig};
+use cpal::{BufferSize, Device, SampleFormat, SampleRate, Stream, StreamConfig};
 use tokio::sync::mpsc;
 use tracing::{error, info};
+use crate::config::AudioDevice;
 
 const TARGET_SAMPLE_RATE: u32 = 48000;
 
 /// Audio frame: mono F32 samples
 pub type AudioFrame = Vec<f32>;
-
-/// Find and validate input device
-fn find_input_device() -> Result<Device, Box<dyn std::error::Error>> {
-    let host = cpal::default_host();
-    let device = host.default_input_device().ok_or("No input device found")?;
-
-    Ok(device)
-}
 
 /// Find best stream config with prioritization:
 /// 1. 48000 Hz + F32
@@ -61,30 +54,6 @@ pub fn find_best_input_stream_config(
     Ok((first_config.min_sample_rate(), first_config.sample_format(), first_config.channels()))
 }
 
-/// Get input stream config: prefer F32, fall back to any format that supports 48kHz
-/// Returns (StreamConfig, SampleFormat)
-fn get_stream_config(
-    device: &Device,
-) -> Result<(StreamConfig, SampleFormat), Box<dyn std::error::Error>> {
-    let (sample_rate, format, _) = find_best_input_stream_config(device)?;
-
-    info!("Selected input config: {} Hz, {:?}", sample_rate.0, format);
-
-    // Find the matching config and create StreamConfig
-    let configs: Vec<_> = device.supported_input_configs()?.collect();
-    for config in configs {
-        if config.sample_format() == format
-            && config.min_sample_rate() <= sample_rate
-            && config.max_sample_rate() >= sample_rate
-        {
-            let stream_config: StreamConfig = config.with_sample_rate(sample_rate).into();
-            return Ok((stream_config, format));
-        }
-    }
-
-    Err("Failed to create stream config from selected parameters".into())
-}
-
 /// Convert stereo to mono by averaging channels (F32)
 fn stereo_to_mono(stereo: &[f32], channels: u16) -> Vec<f32> {
     if channels == 1 {
@@ -107,23 +76,29 @@ fn stereo_to_mono(stereo: &[f32], channels: u16) -> Vec<f32> {
 
 /// Create input stream that captures audio and sends frames through channel
 /// Returns (stream, actual_sample_rate, receiver)
-pub fn create_input_stream(
-) -> Result<(Stream, u32, mpsc::UnboundedReceiver<AudioFrame>), Box<dyn std::error::Error>> {
-    let device = find_input_device()?;
-    let (config, format) = get_stream_config(&device)?;
+pub fn create_input_stream(device_config: AudioDevice) -> Result<(Stream, mpsc::UnboundedReceiver<AudioFrame>), Box<dyn std::error::Error>> {
+    let device = match find_input_device_by_name(device_config.device_name.clone())? {
+        Some(dev) => dev,
+        None => {
+            return Err(format!("Input device '{}' not found", device_config.device_name).into());
+        }
+    };
 
-    let sample_rate = config.sample_rate.0;
+    let stream_config = StreamConfig {
+        channels: device_config.channels,
+        sample_rate: SampleRate(device_config.sample_rate),
+        buffer_size: BufferSize::Default
+    };
 
     let (tx, rx) = mpsc::unbounded_channel();
 
-    let channels = config.channels;
 
     // Match on sample format to build the appropriate stream
-    let stream = match format {
-        SampleFormat::F32 => device.build_input_stream(
-            &config,
+    let stream = match device_config.sample_format.as_str() {
+        "f32" => device.build_input_stream(
+            &stream_config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let mono_samples = stereo_to_mono(data, channels);
+                let mono_samples = stereo_to_mono(data, device_config.channels);
                 let _ = tx.send(mono_samples);
             },
             move |err| {
@@ -131,13 +106,13 @@ pub fn create_input_stream(
             },
             None,
         )?,
-        SampleFormat::I16 => {
+        "i16" => {
             device.build_input_stream(
-                &config,
+                &stream_config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     // Convert i16 to f32 in [-1.0, 1.0] range
                     let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
-                    let mono_samples = stereo_to_mono(&f32_data, channels);
+                    let mono_samples = stereo_to_mono(&f32_data, device_config.channels);
                     let _ = tx.send(mono_samples);
                 },
                 move |err| {
@@ -146,14 +121,14 @@ pub fn create_input_stream(
                 None,
             )?
         }
-        SampleFormat::U16 => {
+        "u16" => {
             device.build_input_stream(
-                &config,
+                &stream_config,
                 move |data: &[u16], _: &cpal::InputCallbackInfo| {
                     // Convert u16 to f32 in [0.0, 1.0] range, then to [-1.0, 1.0]
                     let f32_data: Vec<f32> =
                         data.iter().map(|&s| (s as f32 / 32768.0) - 1.0).collect();
-                    let mono_samples = stereo_to_mono(&f32_data, channels);
+                    let mono_samples = stereo_to_mono(&f32_data, device_config.channels);
                     // Use try_send() to NEVER block the audio callback
                     let _ = tx.send(mono_samples);
                 },
@@ -171,7 +146,7 @@ pub fn create_input_stream(
     // Start the stream
     stream.play()?;
 
-    Ok((stream, sample_rate, rx))
+    Ok((stream, rx))
 }
 
 pub fn list_input_devices() -> Result<Vec<String>, Box<dyn std::error::Error>> {

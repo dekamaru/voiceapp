@@ -1,14 +1,16 @@
 use cpal::Stream;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 use voiceapp_sdk::VoiceClient;
 
 use crate::audio::input::create_input_stream;
 use crate::audio::output::{create_output_stream, AudioOutputHandle};
+use crate::config::AppConfig;
 
 /// Audio manager that handles recording and playback lifecycle
 pub struct AudioManager {
+    app_config: Arc<RwLock<AppConfig>>,
     voice_client: Arc<VoiceClient>,
     input_stream: Option<Stream>,
     input_receiver_task: Option<JoinHandle<()>>,
@@ -17,8 +19,9 @@ pub struct AudioManager {
 
 impl AudioManager {
     /// Create a new AudioManager with UDP send channel and decoder manager
-    pub fn new(voice_client: Arc<VoiceClient>) -> Self {
+    pub fn new(app_config: Arc<RwLock<AppConfig>>, voice_client: Arc<VoiceClient>) -> Self {
         Self {
+            app_config,
             voice_client,
             input_stream: None,
             input_receiver_task: None,
@@ -30,9 +33,11 @@ impl AudioManager {
     pub fn start_recording(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting audio recording");
 
+        let config = self.app_config.read().unwrap();
+
         // Create the input stream and get actual sample rate
-        let (stream, sample_rate, mut receiver) = create_input_stream()?;
-        let voice_input_tx = self.voice_client.get_voice_input_sender(sample_rate as usize)?;
+        let (stream, mut receiver) = create_input_stream(config.audio.input_device.clone())?;
+        let voice_input_tx = self.voice_client.get_voice_input_sender(config.audio.input_device.sample_rate as usize)?;
 
         // Spawn task to read from CPAL receiver and forward to voice input
         let task = tokio::spawn(async move {
@@ -72,12 +77,10 @@ impl AudioManager {
     pub fn create_output_stream_for_user(&mut self, user_id: u64) -> Result<(), Box<dyn std::error::Error>> {
         info!("Creating output stream for user {}", user_id);
 
-        // TODO: fetch before output stream creation
-        let decoder = self.voice_client.get_voice_output_for(user_id, 48000)?;
-        // Create output stream for this user's decoder
-        let (output_handle, detected_rate) = create_output_stream(decoder)?;
-
-        info!("Created output stream for user {} at {} Hz", user_id, detected_rate);
+        let config = self.app_config.read().unwrap();
+        let decoder = self.voice_client.get_voice_output_for(user_id, config.audio.output_device.sample_rate.clone() as usize)?;
+        let output_handle = create_output_stream(config.audio.output_device.clone(), decoder)?;
+        info!("Created output stream for user {} at {} Hz", user_id, config.audio.output_device.sample_rate.clone());
 
         // Store the output handle
         self.output_streams.insert(user_id, output_handle);
