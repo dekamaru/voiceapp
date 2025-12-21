@@ -5,6 +5,7 @@ pub enum VoiceClientError {
     Disconnected,
     Timeout(String),
     SystemError(String),
+    VoiceInputOutputManagerError(String),
 }
 
 impl std::fmt::Display for VoiceClientError {
@@ -14,6 +15,7 @@ impl std::fmt::Display for VoiceClientError {
             VoiceClientError::Disconnected => write!(f, "Disconnected from server"),
             VoiceClientError::Timeout(msg) => write!(f, "Timeout exceeded {}", msg),
             VoiceClientError::SystemError(msg) => write!(f, "System error: {}", msg),
+            VoiceClientError::VoiceInputOutputManagerError(msg) => write!(f, "Voice I/O manager error: {}", msg),
         }
     }
 }

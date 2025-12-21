@@ -1,0 +1,147 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use async_channel::{unbounded, Receiver, Sender};
+use tracing::{error, info};
+use voiceapp_protocol::PacketId;
+use crate::voice_input_pipeline::{VoiceInputPipeline, VoiceInputPipelineConfig};
+use crate::VoiceDecoder;
+
+/// Manages voice input and output with dynamic sample rate configuration
+pub struct VoiceInputOutputManager {
+    send_tx: Sender<Vec<u8>>,
+    input_pipeline: Option<VoiceInputPipeline>,
+    output_decoders: Arc<Mutex<HashMap<u64, (u32, Arc<VoiceDecoder>)>>>,
+
+    _packet_processor_handle: tokio::task::JoinHandle<()>,
+}
+
+impl VoiceInputOutputManager {
+    pub fn new(send_tx: Sender<Vec<u8>>, receive_tx: Receiver<(PacketId, Vec<u8>)>) -> Self {
+        let output_decoders = Arc::new(Mutex::new(HashMap::new()));
+
+        // Spawn async task to process incoming voice packets
+        let packet_processor_handle = tokio::spawn(Self::process_incoming_packets(
+            receive_tx,
+            Arc::clone(&output_decoders),
+        ));
+
+        VoiceInputOutputManager {
+            send_tx,
+            input_pipeline: None,
+            output_decoders,
+            _packet_processor_handle: packet_processor_handle,
+        }
+    }
+
+    /// Get the voice input sender for external audio sources
+    /// External sources can change, but they all write to the same stream
+    pub fn get_voice_input_sender(&mut self, input_sample_rate: usize) -> Result<Sender<Vec<f32>>, String> {
+        // Drop the old pipeline
+        self.input_pipeline = None;
+
+        // Create a new channel for the new pipeline
+        let (new_tx, new_rx) = unbounded();
+
+        let config = VoiceInputPipelineConfig {
+            sample_rate: input_sample_rate,
+        };
+
+        let pipeline = VoiceInputPipeline::new(
+            config,
+            new_rx,
+            self.send_tx.clone(),
+        )?;
+
+        self.input_pipeline = Some(pipeline);
+
+        info!("Voice input pipeline initialized with sample rate {}", input_sample_rate);
+
+        Ok(new_tx)
+    }
+
+    /// Get or create a voice output decoder for a specific user
+    /// If decoder exists and sample rate matches, returns existing decoder
+    /// If sample rate changed, creates new decoder with new sample rate
+    pub fn get_voice_output_for(&mut self, user_id: u64, output_sample_rate: u32) -> Arc<VoiceDecoder> {
+        let mut decoders = self.output_decoders.lock().unwrap();
+
+        // Check if decoder exists for this user
+        if let Some((current_sample_rate, decoder)) = decoders.get(&user_id) {
+            // If sample rate matches, return existing decoder
+            if *current_sample_rate == output_sample_rate {
+                return Arc::clone(decoder);
+            }
+
+            // Sample rate changed, will create new decoder below
+            info!("Sample rate changed for user {}: {} -> {}", user_id, current_sample_rate, output_sample_rate);
+        }
+
+        // Create new decoder with the specified sample rate
+        let decoder = Arc::new(
+            VoiceDecoder::new(output_sample_rate)
+                .expect("Failed to create voice decoder")
+        );
+
+        // Store decoder with its sample rate
+        decoders.insert(user_id, (output_sample_rate, Arc::clone(&decoder)));
+
+        info!("Created voice decoder for user {} with sample rate {}", user_id, output_sample_rate);
+
+        decoder
+    }
+
+    pub fn remove_voice_output_for(&mut self, user_id: u64) {
+        let mut decoders = self.output_decoders.lock().unwrap();
+        decoders.remove(&user_id);
+    }
+
+    pub fn remove_all_voice_outputs(&mut self) {
+        let mut decoders = self.output_decoders.lock().unwrap();
+        decoders.clear();
+    }
+
+    /// Background task that processes incoming voice packets
+    /// Runs until receive_tx is closed
+    async fn process_incoming_packets(
+        receive_rx: Receiver<(PacketId, Vec<u8>)>,
+        output_decoders: Arc<Mutex<HashMap<u64, (u32, Arc<VoiceDecoder>)>>>,
+    ) {
+        info!("Voice packet processor started");
+
+        loop {
+            match receive_rx.recv().await {
+                Ok((packet_id, data)) => {
+                    // Only process VoiceData packets
+                    if packet_id != PacketId::VoiceData {
+                        continue;
+                    }
+
+                    // Decode voice data packet
+                    let voice_data = match voiceapp_protocol::decode_voice_data(&data) {
+                        Ok(vd) => vd,
+                        Err(e) => {
+                            error!("Failed to decode voice data packet: {}", e);
+                            continue;
+                        }
+                    };
+
+                    // Extract user_id from ssrc field
+                    let user_id = voice_data.ssrc;
+
+                    // Look up decoder for this user
+                    let decoders = output_decoders.lock().unwrap();
+                    if let Some((_, decoder)) = decoders.get(&user_id) {
+                        // Insert packet into the decoder's NetEQ buffer
+                        if let Err(e) = decoder.insert_packet(voice_data) {
+                            error!("Failed to insert packet for user {}: {}", user_id, e);
+                        }
+                    }
+                }
+                Err(_) => {
+                    info!("Voice packet processor stopped (channel closed)");
+                    break;
+                }
+            }
+        }
+    }
+}

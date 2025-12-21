@@ -6,10 +6,10 @@ use crate::widgets::Widgets;
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Family, Weight};
 use iced::widget::container::Style;
-use iced::widget::{button, container, row, space, stack, text, text_input, Space};
+use iced::widget::{container, space, stack, text, text_input};
 use iced::{border, Background, Border, Color, Element, Font, Length, Padding, Task};
 use std::sync::{Arc, RwLock};
-use tracing::{debug, info};
+use tracing::{debug};
 use crate::config::AppConfig;
 
 #[derive(Default)]
@@ -52,7 +52,7 @@ impl LoginPage {
         !self.username.is_empty() && !self.voice_url.is_empty()
     }
 
-    fn login_screen(&self) -> iced::widget::Stack<Message> {
+    fn login_screen(&self) -> iced::widget::Stack<'_, Message> {
         let bold = Font {
             family: Family::Name("Rubik"),
             weight: Weight::Semibold,
@@ -110,7 +110,7 @@ impl LoginPage {
         value: &mut String,
         message: fn(String) -> LoginPageMessage,
         submit_message: LoginPageMessage,
-    ) -> iced::widget::Container<Message> {
+    ) -> iced::widget::Container<'_, Message> {
         let container_style = |_theme: &iced::Theme| Style {
             background: Some(Background::Color(DARK_CONTAINER_BACKGROUND)),
             border: border::rounded(24),

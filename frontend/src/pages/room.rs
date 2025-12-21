@@ -1,10 +1,9 @@
 use crate::application::{Message, Page, PageType, VoiceCommand, VoiceCommandResult};
 use crate::colors::{
-    color_alert, color_success, debug_red, divider_bg, slider_bg, slider_thumb, text_chat_header,
+    color_alert, color_success, divider_bg, slider_bg, slider_thumb, text_chat_header,
     text_primary, text_secondary, DARK_CONTAINER_BACKGROUND,
 };
 use crate::icons::Icons;
-use crate::pages::settings::SettingsPage;
 use crate::widgets::Widgets;
 use chrono::{DateTime, Local, Utc};
 use iced::alignment::{Horizontal, Vertical};
@@ -14,7 +13,7 @@ use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
 use iced::widget::scrollable::{Direction, Rail, Scrollbar, Scroller};
 use iced::widget::{
-    button, column, container, row, rule, scrollable, space, text, Container, Id, Scrollable, Space,
+    button, column, container, row, rule, scrollable, space, text, Container, Id, Scrollable,
 };
 use iced::{border, Alignment, Background, Border, Color, Element, Length, Padding, Task, Theme};
 use std::collections::{BTreeMap, HashMap};
@@ -137,7 +136,7 @@ impl RoomPage {
                 .height(48),
             )
             .on_press(RoomPageMessage::JoinLeaveToggle.into())
-            .style(|theme, status| {
+            .style(|_, status| {
                 if status == Status::Hovered || status == Status::Pressed {
                     button::Style {
                         background: Some(Background::Color(text_primary())),
@@ -425,13 +424,6 @@ impl RoomPage {
         );
 
         elements
-    }
-
-    fn debug_border() -> fn(&Theme) -> Style {
-        |_theme: &Theme| Style {
-            border: border::width(1).color(debug_red()),
-            ..Style::default()
-        }
     }
 
     fn is_in_voice(&self) -> bool {

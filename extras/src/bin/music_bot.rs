@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{error, info};
-use voiceapp_sdk::{voiceapp_protocol, VoiceClient, VoiceInputPipeline, VoiceInputPipelineConfig};
+use voiceapp_sdk::{VoiceClient};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -72,37 +72,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect to voice server
     info!("Connecting to voice servers...");
-    let mut client = VoiceClient::new(48000)?;  // Music bot uses 48kHz audio
-    client
-        .connect(&server_addr, &voice_server_addr, "music_bot")
-        .await?;
+    let client = VoiceClient::new()?;
+    client.connect(&server_addr, &voice_server_addr, "music_bot").await?;
     client.join_channel().await?;
     info!("Connected!");
 
-    // Create voice input pipeline for 48kHz audio (music bot expects 48kHz)
-    let pipeline = VoiceInputPipeline::new(VoiceInputPipelineConfig { sample_rate: 48000 })?;
-    let voice_input_tx = pipeline.input_sender();
-    let pipeline_output_rx = pipeline.output_receiver();
-
-    // Spawn task to forward encoded voice data to UDP
-    let udp_send_tx = client.get_udp_send_tx();
-    tokio::spawn(async move {
-        loop {
-            match pipeline_output_rx.recv().await {
-                Ok(voice_data) => {
-                    let encoded = voiceapp_protocol::encode_voice_data(&voice_data);
-                    if let Err(e) = udp_send_tx.send(encoded).await {
-                        error!("Failed to send voice data to UDP: {}", e);
-                        break;
-                    }
-                }
-                Err(_) => {
-                    info!("Pipeline output channel closed");
-                    break;
-                }
-            }
-        }
-    });
+    let voice_input_tx = client.get_voice_input_sender(48000)?;
 
     // Stream the WAV file in 20ms frames (960 samples at 48kHz)
     info!("Starting audio stream...");

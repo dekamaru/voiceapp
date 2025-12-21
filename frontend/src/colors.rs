@@ -42,11 +42,6 @@ pub fn slider_thumb() -> Color {
     Color::from_rgb8(242, 242, 242)
 }
 
-// Debug colors
-pub fn debug_red() -> Color {
-    Color::from_rgb8(255, 0, 0)
-}
-
 pub fn text_selection() -> Color {
     Color::from_rgba8(242, 242, 242, 0.1)
 }

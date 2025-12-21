@@ -1,7 +1,7 @@
 use neteq::codec::{AudioDecoder, OpusDecoder};
 use neteq::{AudioPacket, NetEq, NetEqConfig, RtpHeader};
 use rubato::{FftFixedIn, Resampler};
-use std::sync::{Arc, Mutex};
+use std::sync::{Mutex};
 use voiceapp_protocol::VoiceData;
 
 const OPUS_SAMPLE_RATE: u32 = 48000;
@@ -100,7 +100,7 @@ impl AudioDecoder for OpusResamplingDecoder {
 unsafe impl Send for OpusResamplingDecoder {}
 
 pub struct VoiceDecoder {
-    neteq: Arc<Mutex<NetEq>>,
+    neteq: Mutex<NetEq>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,21 +127,19 @@ impl VoiceDecoder {
             ..Default::default()
         };
 
-        let mut neteq =
-            NetEq::new(neteq_config).map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))?;
+        let mut neteq = NetEq::new(neteq_config).map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))?;
 
         // Create custom resampling decoder
         let decoder = OpusResamplingDecoder::new(target_sample_rate)
             .map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))?;
+
         neteq.register_decoder(DECODER_PACKET_ID, Box::new(decoder));
 
-        let neteq = Arc::new(Mutex::new(neteq));
-
-        Ok(VoiceDecoder { neteq })
+        Ok(VoiceDecoder { neteq: Mutex::new(neteq) })
     }
 
     /// Insert a received voice packet into NetEQ for buffering and reordering
-    pub async fn insert_packet(&self, packet: VoiceData) -> Result<(), VoiceDecoderError> {
+    pub fn insert_packet(&self, packet: VoiceData) -> Result<(), VoiceDecoderError> {
         let decoder_header = RtpHeader::new(
             packet.sequence as u16,
             packet.timestamp,
@@ -149,6 +147,7 @@ impl VoiceDecoder {
             DECODER_PACKET_ID,
             false,
         );
+
         let decoder_packet = AudioPacket::new(
             decoder_header,
             packet.opus_frame,
@@ -157,21 +156,19 @@ impl VoiceDecoder {
             FRAME_LENGTH_MS,
         );
 
-        let mut neteq = self.neteq.lock().unwrap();
+        let mut neteq = self.neteq.lock().map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))?;
+
         neteq
             .insert_packet(decoder_packet)
             .map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))
     }
 
     pub fn get_audio(&self) -> Result<Vec<f32>, VoiceDecoderError> {
-        let mut neteq = self.neteq.lock().unwrap();
+        let mut neteq = self.neteq.lock().map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))?;
+
         neteq
             .get_audio()
             .map(|frame| frame.samples)
             .map_err(|e| VoiceDecoderError::NetEqError(e.to_string()))
-    }
-
-    pub fn flush(&self) {
-        self.neteq.lock().unwrap().flush();
     }
 }

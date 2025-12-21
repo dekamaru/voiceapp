@@ -5,8 +5,6 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 use voiceapp_protocol::{PacketId, ParticipantInfo};
 
-use crate::voice_decoder_manager::VoiceDecoderManager;
-
 /// Events emitted by VoiceClient when state changes occur
 #[derive(Debug, Clone)]
 pub enum VoiceClientEvent {
@@ -41,14 +39,13 @@ pub struct ClientState {
 /// Handles TCP event processing and emits client events
 pub struct EventHandler {
     state: Arc<RwLock<ClientState>>,
-    decoder_manager: Arc<VoiceDecoderManager>,
     event_tx: Sender<VoiceClientEvent>,
     event_rx: Receiver<VoiceClientEvent>,
 }
 
 impl EventHandler {
     /// Create a new TCP event handler
-    pub fn new(decoder_manager: Arc<VoiceDecoderManager>) -> Self {
+    pub fn new() -> Self {
         let (event_tx, event_rx) = unbounded();
         
         // Create initial empty state
@@ -60,7 +57,6 @@ impl EventHandler {
         
         Self {
             state,
-            decoder_manager,
             event_tx,
             event_rx,
         }
@@ -79,7 +75,6 @@ impl EventHandler {
     /// Listen to incoming packets and process events
     pub fn listen_to_packets(&self, packet_rx: Receiver<(PacketId, Vec<u8>)>) {
         let state = Arc::clone(&self.state);
-        let decoder_manager = Arc::clone(&self.decoder_manager);
         let event_tx = self.event_tx.clone();
 
         tokio::spawn(async move {
@@ -90,7 +85,6 @@ impl EventHandler {
                             packet_id,
                             &payload,
                             &state,
-                            &decoder_manager,
                             &event_tx,
                         )
                         .await;
@@ -113,7 +107,6 @@ impl EventHandler {
         packet_id: PacketId,
         payload: &[u8],
         state: &Arc<RwLock<ClientState>>,
-        decoder_manager: &Arc<VoiceDecoderManager>,
         event_tx: &Sender<VoiceClientEvent>,
     ) -> Result<(), String> {
         match packet_id {
@@ -136,7 +129,7 @@ impl EventHandler {
                 Self::handle_user_joined_voice(payload, state, event_tx).await
             }
             PacketId::UserLeftVoice => {
-                Self::handle_user_left_voice(payload, state, decoder_manager, event_tx).await
+                Self::handle_user_left_voice(payload, state, event_tx).await
             }
             PacketId::UserSentMessage => Self::handle_user_sent_message(payload, event_tx).await,
             _ => {
@@ -272,14 +265,10 @@ impl EventHandler {
     async fn handle_user_left_voice(
         payload: &[u8],
         state: &Arc<RwLock<ClientState>>,
-        decoder_manager: &Arc<VoiceDecoderManager>,
         event_tx: &Sender<VoiceClientEvent>,
     ) -> Result<(), String> {
         let user_id = voiceapp_protocol::decode_user_left_voice(payload)
             .map_err(|e| format!("Decode error: {}", e))?;
-
-        // Remove decoder for user who left
-        decoder_manager.remove_user(user_id).await;
 
         let mut s = state.write().await;
         if let Some(participant) = s.participants.get_mut(&user_id) {

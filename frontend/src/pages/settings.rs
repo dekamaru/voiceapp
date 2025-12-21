@@ -1,9 +1,7 @@
 use crate::application::{Message, Page, PageType};
 use crate::audio::{create_input_stream, list_input_devices, list_output_devices};
-use crate::colors::{debug_red, text_primary, DARK_BACKGROUND, DARK_CONTAINER_BACKGROUND};
+use crate::colors::{text_primary, DARK_BACKGROUND, DARK_CONTAINER_BACKGROUND};
 use crate::icons::Icons;
-use crate::pages::room::RoomPageMessage;
-use crate::widgets;
 use crate::widgets::Widgets;
 use cpal::Stream;
 use iced::border::{radius, rounded, Radius};
@@ -14,7 +12,7 @@ use iced::widget::rule::FillMode;
 use iced::widget::slider::{Handle, HandleShape, Rail};
 use iced::widget::{button, column, container, mouse_area, progress_bar, row, rule, slider, stack, text};
 use iced::{
-    border, Alignment, Background, Border, Color, Element, Font, Length, Padding, Renderer, Task,
+    Alignment, Background, Border, Color, Element, Font, Length, Padding, Renderer, Task,
     Theme,
 };
 use std::collections::HashMap;
@@ -389,13 +387,6 @@ impl SettingsPage {
             left: 24.0,
             bottom: 32.0,
         })
-    }
-
-    fn debug_border() -> fn(&Theme) -> Style {
-        |_theme: &Theme| Style {
-            border: border::width(1).color(debug_red()),
-            ..Style::default()
-        }
     }
 }
 

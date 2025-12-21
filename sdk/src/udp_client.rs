@@ -1,12 +1,10 @@
 use async_channel::{unbounded, Receiver, Sender};
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tracing::{debug, error};
 use voiceapp_protocol::PacketId;
 
 use crate::error::VoiceClientError;
-use crate::voice_decoder_manager::VoiceDecoderManager;
 
 /// Default timeout for request/response operations (per attempt)
 const REQUEST_TIMEOUT_SECS: u64 = 5;
@@ -20,12 +18,11 @@ pub struct UdpClient {
     send_rx: Receiver<Vec<u8>>,
     packet_tx: Sender<(PacketId, Vec<u8>)>,
     packet_rx: Receiver<(PacketId, Vec<u8>)>,
-    decoder_manager: Arc<VoiceDecoderManager>,
 }
 
 impl UdpClient {
     /// Create a new UdpClient
-    pub fn new(decoder_manager: Arc<VoiceDecoderManager>) -> Self {
+    pub fn new() -> Self {
         let (send_tx, send_rx) = unbounded();
         let (packet_tx, packet_rx) = unbounded();
 
@@ -34,13 +31,17 @@ impl UdpClient {
             send_rx,
             packet_tx,
             packet_rx,
-            decoder_manager,
         }
     }
 
     /// Get sender for outgoing packets
     pub fn packet_sender(&self) -> Sender<Vec<u8>> {
         self.send_tx.clone()
+    }
+
+    /// Get receiver for incoming packets
+    pub fn packet_receiver(&self) -> Receiver<(PacketId, Vec<u8>)> {
+        self.packet_rx.clone()
     }
 
     /// Connect UDP socket to server and spawn handler
@@ -187,7 +188,6 @@ impl UdpClient {
     fn spawn_handler(&self, socket: UdpSocket) {
         let send_rx = self.send_rx.clone();
         let packet_tx = self.packet_tx.clone();
-        let decoder_manager = Arc::clone(&self.decoder_manager);
 
         tokio::spawn(async move {
             let mut read_buf = [0u8; 4096];
@@ -207,7 +207,6 @@ impl UdpClient {
                         match Self::handle_incoming(
                             result,
                             &read_buf,
-                            &decoder_manager,
                             &packet_tx
                         ).await {
                             Ok(should_continue) => {
@@ -249,7 +248,6 @@ impl UdpClient {
     async fn handle_incoming(
         read_result: std::io::Result<usize>,
         read_buf: &[u8],
-        decoder_manager: &Arc<VoiceDecoderManager>,
         packet_tx: &Sender<(PacketId, Vec<u8>)>,
     ) -> Result<bool, String> {
         match read_result {
@@ -262,17 +260,7 @@ impl UdpClient {
                 let (packet_id, payload) = voiceapp_protocol::parse_packet(&read_buf[..n])
                     .map_err(|e| format!("Parse error: {}", e))?;
 
-                // Handle voice data packets specially
-                if packet_id == PacketId::VoiceData {
-                    if let Ok(voice_packet) = voiceapp_protocol::decode_voice_data(&payload) {
-                        if let Err(e) = decoder_manager.insert_packet(voice_packet).await {
-                            debug!("Failed to insert voice packet: {}", e);
-                        }
-                    }
-                } else {
-                    // Route non-voice packets to packet stream
-                    let _ = packet_tx.send((packet_id, payload.to_vec())).await;
-                }
+                let _ = packet_tx.send((packet_id, payload.to_vec())).await;
 
                 Ok(true)
             }

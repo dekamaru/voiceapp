@@ -4,14 +4,14 @@ use crate::icons::Icons;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::button::Status;
 use iced::widget::container::Style;
-use iced::widget::{button, container, row, text, text_input, Container};
+use iced::widget::{button, container, row, text_input, Container};
 use iced::{border, Background, Border, Color, Element, Length, Padding};
 
 pub struct Widgets;
 
 impl Widgets {
     // Wraps container with a button
-    pub fn container_button(container: Container<Message>) -> iced::widget::Button<'_, Message> {
+    pub fn container_button(container: Container<'_, Message>) -> iced::widget::Button<'_, Message> {
         let style = |_theme: &iced::Theme, _status| button::Style {
             background: Some(Background::Color(Color::TRANSPARENT)),
             ..button::Style::default()

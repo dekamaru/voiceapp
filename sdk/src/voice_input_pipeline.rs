@@ -1,8 +1,7 @@
-use async_channel::{unbounded, Receiver, Sender};
+use async_channel::{Receiver, Sender};
 use rubato::{FftFixedIn, Resampler};
 use tracing::{error, info, warn};
 use crate::voice_encoder::{VoiceEncoder, OPUS_FRAME_SAMPLES};
-use voiceapp_protocol::VoiceData;
 
 /// Configuration for VoiceInputPipeline
 pub struct VoiceInputPipelineConfig {
@@ -11,40 +10,29 @@ pub struct VoiceInputPipelineConfig {
 
 /// Voice input pipeline: resamples, buffers, and encodes audio to Opus
 pub struct VoiceInputPipeline {
-    input_tx: Sender<Vec<f32>>,
-    output_rx: Receiver<VoiceData>,
+    _handle: tokio::task::JoinHandle<()>,
 }
 
 impl VoiceInputPipeline {
-    /// Create a new VoiceInputPipeline with fixed sample rate configuration
-    pub fn new(config: VoiceInputPipelineConfig) -> Result<Self, String> {
-        let (input_tx, input_rx) = unbounded();
-        let (output_tx, output_rx) = unbounded();
-
+    /// Create a new VoiceInputPipeline with external channels
+    pub fn new(
+        config: VoiceInputPipelineConfig,
+        voice_input_rx: Receiver<Vec<f32>>,
+        udp_send_tx: Sender<Vec<u8>>,
+    ) -> Result<Self, String> {
         // Spawn the pipeline processing task
-        tokio::spawn(Self::pipeline_task(config, input_rx, output_tx));
+        let handle = tokio::spawn(Self::pipeline_task(config, voice_input_rx, udp_send_tx));
 
         Ok(VoiceInputPipeline {
-            input_tx,
-            output_rx,
+            _handle: handle,
         })
     }
 
-    /// Get a cloneable sender for audio samples
-    pub fn input_sender(&self) -> Sender<Vec<f32>> {
-        self.input_tx.clone()
-    }
-
-    /// Get a cloneable receiver for encoded voice data
-    pub fn output_receiver(&self) -> Receiver<VoiceData> {
-        self.output_rx.clone()
-    }
-
-    /// Internal pipeline task: processes audio from input_rx and sends VoiceData to output_tx
+    /// Internal pipeline task: processes audio from input_rx and sends encoded data to UDP
     async fn pipeline_task(
         config: VoiceInputPipelineConfig,
         input_rx: Receiver<Vec<f32>>,
-        output_tx: Sender<VoiceData>,
+        udp_send_tx: Sender<Vec<u8>>,
     ) {
         const TARGET_SAMPLE_RATE: usize = 48000;
         const RESAMPLER_CHUNK_SIZE: usize = 480;  // Optimized for Opus frame alignment (480 × 2 = 960)
@@ -141,9 +129,11 @@ impl VoiceInputPipeline {
                         let frame: Vec<f32> = encode_buffer.drain(0..OPUS_FRAME_SAMPLES).collect();
 
                         match codec.encode(&frame) {
-                            Ok(Some(packet)) => {
-                                if output_tx.send(packet).await.is_err() {
-                                    error!("Output channel closed, stopping pipeline");
+                            Ok(Some(voice_data)) => {
+                                // Encode VoiceData to bytes and send to UDP
+                                let encoded_packet = voiceapp_protocol::encode_voice_data(&voice_data);
+                                if udp_send_tx.send(encoded_packet).await.is_err() {
+                                    error!("UDP send channel closed, stopping pipeline");
                                     return;
                                 }
                             }
@@ -162,8 +152,9 @@ impl VoiceInputPipeline {
                     // Input channel closed, encode any remaining samples
                     if !encode_buffer.is_empty() {
                         match codec.encode(&encode_buffer) {
-                            Ok(Some(packet)) => {
-                                let _ = output_tx.send(packet).await;
+                            Ok(Some(voice_data)) => {
+                                let encoded_packet = voiceapp_protocol::encode_voice_data(&voice_data);
+                                let _ = udp_send_tx.send(encoded_packet).await;
                             }
                             Ok(None) => {
                                 // No final frame to send

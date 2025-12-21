@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::audio::{find_best_input_stream_config, find_input_device_by_name, AudioManager};
+use crate::audio::{find_input_device_by_name, AudioManager};
 use crate::pages::login::{LoginPage, LoginPageMessage};
 use crate::pages::room::{RoomPage, RoomPageMessage};
 use crate::pages::settings::{SettingsPage, SettingsPageMessage};
@@ -72,7 +72,7 @@ pub struct Application {
 impl Application {
     pub fn new() -> (Self, Task<Message>) {
         let config = AppConfig::load().unwrap();
-        let voice_client = Arc::new(VoiceClient::new(config.audio.output_device.sample_rate).expect("failed to init voice client"));
+        let voice_client = Arc::new(VoiceClient::new().expect("failed to init voice client"));
         let audio_manager = AudioManager::new(voice_client.clone());
         let events_task = Task::run(voice_client.event_stream(), |e| Message::ServerEventReceived(e));
         let auto_login_task = if config.server.is_credentials_filled() {
@@ -113,7 +113,7 @@ impl Application {
         )
     }
 
-    pub fn view(&self) -> iced::Element<Message> {
+    pub fn view(&self) -> iced::Element<'_, Message> {
         self.pages.get(&self.current_page).unwrap().view()
     }
 
@@ -139,7 +139,7 @@ impl Application {
 
                 // Create output streams for all users currently in voice
                 for user_id in users_in_voice {
-                    if let Err(e) = self.audio_manager.create_stream_for_user(user_id) {
+                    if let Err(e) = self.audio_manager.create_output_stream_for_user(user_id) {
                         error!("Failed to create output stream for user {}: {}", user_id, e);
                     }
                 };
@@ -149,14 +149,14 @@ impl Application {
             Message::VoiceCommandResult(VoiceCommandResult::LeaveVoiceChannel(Ok(()))) => {
                 // Stop audio when leave succeeds
                 self.audio_manager.stop_recording();
-                self.audio_manager.stop_playback();
+                self.audio_manager.remove_all_output_streams();
 
                 Task::none()
             }
             Message::ServerEventReceived(VoiceClientEvent::UserJoinedVoice { user_id }) => {
                 // Create output stream for new user in voice
                 if self.voice_client.is_in_voice_channel() {
-                    if let Err(e) = self.audio_manager.create_stream_for_user(*user_id) {
+                    if let Err(e) = self.audio_manager.create_output_stream_for_user(*user_id) {
                         error!("Failed to create output stream for user {}: {}", user_id, e);
                     };
                 }
@@ -165,7 +165,7 @@ impl Application {
             }
             Message::ServerEventReceived(VoiceClientEvent::UserLeftVoice { user_id }) => {
                 if self.voice_client.is_in_voice_channel() {
-                    self.audio_manager.remove_stream_for_user(*user_id);
+                    self.audio_manager.remove_output_stream_for_user(*user_id);
                 }
 
                 Task::none()

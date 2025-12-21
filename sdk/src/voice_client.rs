@@ -1,5 +1,5 @@
 use async_channel::{Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tracing::info;
 
 use voiceapp_protocol::PacketId;
@@ -7,32 +7,37 @@ pub use crate::error::VoiceClientError;
 use crate::tcp_client::TcpClient;
 use crate::udp_client::UdpClient;
 use crate::event_handler::{EventHandler, VoiceClientEvent};
-use crate::voice_decoder_manager::VoiceDecoderManager;
+use crate::{VoiceDecoder, VoiceInputOutputManager};
 
 /// The VoiceClient for managing voice connections
 pub struct VoiceClient {
     tcp_client: TcpClient,
     udp_client: UdpClient,
     event_handler: EventHandler,
-    decoder_manager: Arc<VoiceDecoderManager>,
+    voice_io_manager: Mutex<VoiceInputOutputManager>,
 }
 
 impl VoiceClient {
     /// Create a new VoiceClient with all channels initialized
     /// sample_rate: target output sample rate for the decoder (should match audio device)
-    pub fn new(output_sample_rate: u32) -> Result<Self, VoiceClientError> {
+    pub fn new() -> Result<Self, VoiceClientError> {
         // Create TCP client
         let tcp_client = TcpClient::new();
-        let decoder_manager = Arc::new(VoiceDecoderManager::new(output_sample_rate));
-        let udp_client = UdpClient::new(Arc::clone(&decoder_manager));
-        let event_handler = EventHandler::new(Arc::clone(&decoder_manager));
+        let udp_client = UdpClient::new();
+        let event_handler = EventHandler::new();
+        let voice_io_manager = Mutex::new(
+            VoiceInputOutputManager::new(
+                udp_client.packet_sender(),
+                udp_client.packet_receiver()
+            )
+        );
 
         // Create client
         Ok(VoiceClient {
             tcp_client,
             udp_client,
             event_handler,
-            decoder_manager,
+            voice_io_manager,
         })
     }
 
@@ -40,6 +45,43 @@ impl VoiceClient {
     /// Returns a cloneable receiver that will receive all events from this point forward
     pub fn event_stream(&self) -> Receiver<VoiceClientEvent> {
         self.event_handler.event_stream()
+    }
+
+    /// Returns stream which should be used for raw input samples sending
+    pub fn get_voice_input_sender(&self, input_sample_rate: usize) -> Result<Sender<Vec<f32>>, VoiceClientError> {
+        let mut manager = self.voice_io_manager.lock()
+            .map_err(|e| VoiceClientError::VoiceInputOutputManagerError(format!("failed to get lock: {}", e)))?;
+
+        let sender = manager.get_voice_input_sender(input_sample_rate)
+            .map_err(|e| VoiceClientError::VoiceInputOutputManagerError(format!("failed to get voice input sender: {}", e)))?;
+
+        Ok(sender)
+    }
+
+    pub fn get_voice_output_for(&self, user_id: u64, output_sample_rate: usize) -> Result<Arc<VoiceDecoder>, VoiceClientError> {
+        let mut manager = self.voice_io_manager.lock()
+            .map_err(|e| VoiceClientError::VoiceInputOutputManagerError(format!("failed to get lock: {}", e)))?;
+
+        let decoder = manager.get_voice_output_for(user_id, output_sample_rate as u32);
+
+        Ok(decoder)
+    }
+
+    /// To cleanup voice decoder
+    pub fn remove_voice_output_for(&self, user_id: u64) -> Result<(), VoiceClientError> {
+        let mut manager = self.voice_io_manager.lock()
+            .map_err(|e| VoiceClientError::VoiceInputOutputManagerError(format!("failed to get lock: {}", e)))?;
+
+        manager.remove_voice_output_for(user_id);
+        Ok(())
+    }
+
+    pub fn remove_all_voice_outputs(&self) -> Result<(), VoiceClientError> {
+        let mut manager = self.voice_io_manager.lock()
+            .map_err(|e| VoiceClientError::VoiceInputOutputManagerError(format!("failed to get lock: {}", e)))?;
+
+        manager.remove_all_voice_outputs();
+        Ok(())
     }
 
     pub async fn connect(
@@ -130,12 +172,6 @@ impl VoiceClient {
         Ok(())
     }
 
-    /// Get a receiver for decoded voice output (mono F32 PCM samples at 48kHz)
-    /// Subscribe to incoming voice from other participants
-    pub fn get_decoder_manager(&self) -> Arc<VoiceDecoderManager> {
-        self.decoder_manager.clone()
-    }
-
     /// Get list of user IDs currently in voice channel (blocking version)
     pub fn get_users_in_voice(&self) -> Vec<u64> {
         let state_arc = self.event_handler.state();
@@ -152,10 +188,5 @@ impl VoiceClient {
         let state_arc = self.event_handler.state();
         let state = state_arc.blocking_read();
         state.in_voice_channel
-    }
-
-    /// Get UDP send channel for AudioManager to forward encoded voice packets
-    pub fn get_udp_send_tx(&self) -> Sender<Vec<u8>> {
-        self.udp_client.packet_sender()
     }
 }
