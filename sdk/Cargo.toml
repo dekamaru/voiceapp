@@ -8,6 +8,7 @@ voiceapp-protocol = { path = "../protocol" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 opus = "0.3"
-neteq = "0.7.1"
+neteq = "0.8.0"
 async-channel = "2.5.0"
 rubato = "0.16.2"
+dashmap = "6.1"

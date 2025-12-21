@@ -1,6 +1,9 @@
 use async_channel::{unbounded, Receiver, Sender};
+use dashmap::DashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
+use tokio::sync::oneshot;
 use tracing::{debug, error};
 use voiceapp_protocol::PacketId;
 
@@ -18,6 +21,7 @@ pub struct UdpClient {
     send_rx: Receiver<Vec<u8>>,
     packet_tx: Sender<(PacketId, Vec<u8>)>,
     packet_rx: Receiver<(PacketId, Vec<u8>)>,
+    pending_requests: Arc<DashMap<PacketId, oneshot::Sender<Vec<u8>>>>,
 }
 
 impl UdpClient {
@@ -31,6 +35,7 @@ impl UdpClient {
             send_rx,
             packet_tx,
             packet_rx,
+            pending_requests: Arc::new(DashMap::new()),
         }
     }
 
@@ -63,64 +68,6 @@ impl UdpClient {
         Ok(())
     }
 
-    /// Send request and wait for response with retry logic
-    pub async fn send_request(
-        &self,
-        request: Vec<u8>,
-        expected_response_id: PacketId,
-    ) -> Result<(), VoiceClientError> {
-        let packet_rx = self.packet_rx.clone();
-
-        for attempt in 1..=MAX_RETRY_ATTEMPTS {
-            debug!(
-                "[UDP] Sending request (attempt {}/{})",
-                attempt, MAX_RETRY_ATTEMPTS
-            );
-
-            // Send request
-            self.send_tx
-                .send(request.clone())
-                .await
-                .map_err(|_| VoiceClientError::Disconnected)?;
-
-            // Wait for response with timeout
-            let timeout_result =
-                tokio::time::timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), async {
-                    loop {
-                        match packet_rx.recv().await {
-                            Ok((packet_id, _payload)) => {
-                                if packet_id == expected_response_id {
-                                    return Ok(());
-                                }
-                                // Ignore other packets, keep waiting for expected response
-                            }
-                            Err(_) => return Err(VoiceClientError::Disconnected),
-                        }
-                    }
-                })
-                .await;
-
-            match timeout_result {
-                Ok(Ok(())) => {
-                    debug!("[UDP] Request successful");
-                    return Ok(());
-                }
-                Ok(Err(e)) => return Err(e),
-                Err(_) => {
-                    debug!("[UDP] Request timeout on attempt {}", attempt);
-                    if attempt < MAX_RETRY_ATTEMPTS {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                    }
-                }
-            }
-        }
-
-        Err(VoiceClientError::Timeout(format!(
-            "UDP request failed after {} attempts",
-            MAX_RETRY_ATTEMPTS
-        )))
-    }
-
     /// Send request and wait for decoded response with retry logic
     pub async fn send_request_with_response<T, F>(
         &self,
@@ -131,13 +78,17 @@ impl UdpClient {
     where
         F: Fn(&[u8]) -> std::io::Result<T>,
     {
-        let packet_rx = self.packet_rx.clone();
-
         for attempt in 1..=MAX_RETRY_ATTEMPTS {
             debug!(
                 "[UDP] Sending request with response (attempt {}/{})",
                 attempt, MAX_RETRY_ATTEMPTS
             );
+
+            // Create oneshot channel for this specific request
+            let (response_tx, response_rx) = oneshot::channel();
+
+            // Register the oneshot sender in pending requests map
+            self.pending_requests.insert(expected_response_id, response_tx);
 
             // Send request
             self.send_tx
@@ -146,31 +97,29 @@ impl UdpClient {
                 .map_err(|_| VoiceClientError::Disconnected)?;
 
             // Wait for response with timeout
-            let timeout_result =
-                tokio::time::timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), async {
-                    loop {
-                        match packet_rx.recv().await {
-                            Ok((packet_id, payload)) => {
-                                if packet_id == expected_response_id {
-                                    return Ok(payload);
-                                }
-                                // Ignore other packets, keep waiting for expected response
-                            }
-                            Err(_) => return Err(VoiceClientError::Disconnected),
-                        }
-                    }
-                })
-                .await;
+            let timeout_result = tokio::time::timeout(
+                Duration::from_secs(REQUEST_TIMEOUT_SECS),
+                response_rx,
+            )
+            .await;
 
             match timeout_result {
                 Ok(Ok(payload)) => {
                     debug!("[UDP] Request with response successful");
+                    // Clean up pending request
+                    self.pending_requests.remove(&expected_response_id);
                     return decoder(&payload)
                         .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()));
                 }
-                Ok(Err(e)) => return Err(e),
+                Ok(Err(_)) => {
+                    // Oneshot channel closed (handler stopped)
+                    self.pending_requests.remove(&expected_response_id);
+                    return Err(VoiceClientError::Disconnected);
+                }
                 Err(_) => {
                     debug!("[UDP] Request timeout on attempt {}", attempt);
+                    // Clean up pending request on timeout
+                    self.pending_requests.remove(&expected_response_id);
                     if attempt < MAX_RETRY_ATTEMPTS {
                         tokio::time::sleep(Duration::from_millis(100)).await;
                     }
@@ -188,6 +137,7 @@ impl UdpClient {
     fn spawn_handler(&self, socket: UdpSocket) {
         let send_rx = self.send_rx.clone();
         let packet_tx = self.packet_tx.clone();
+        let pending_requests = self.pending_requests.clone();
 
         tokio::spawn(async move {
             let mut read_buf = [0u8; 4096];
@@ -207,7 +157,8 @@ impl UdpClient {
                         match Self::handle_incoming(
                             result,
                             &read_buf,
-                            &packet_tx
+                            &packet_tx,
+                            &pending_requests
                         ).await {
                             Ok(should_continue) => {
                                 if !should_continue {
@@ -249,6 +200,7 @@ impl UdpClient {
         read_result: std::io::Result<usize>,
         read_buf: &[u8],
         packet_tx: &Sender<(PacketId, Vec<u8>)>,
+        pending_requests: &Arc<DashMap<PacketId, oneshot::Sender<Vec<u8>>>>,
     ) -> Result<bool, String> {
         match read_result {
             Ok(0) => {
@@ -260,7 +212,14 @@ impl UdpClient {
                 let (packet_id, payload) = voiceapp_protocol::parse_packet(&read_buf[..n])
                     .map_err(|e| format!("Parse error: {}", e))?;
 
-                let _ = packet_tx.send((packet_id, payload.to_vec())).await;
+                // Check if this packet is a response to a pending request
+                if let Some((_, response_tx)) = pending_requests.remove(&packet_id) {
+                    // Send to the oneshot channel for the specific request
+                    let _ = response_tx.send(payload.to_vec());
+                } else {
+                    // Not a pending request response, broadcast to general packet channel
+                    let _ = packet_tx.send((packet_id, payload.to_vec())).await;
+                }
 
                 Ok(true)
             }

@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use async_channel::{unbounded, Receiver, Sender};
+use dashmap::DashMap;
 use tracing::{error, info};
 use voiceapp_protocol::PacketId;
 use crate::voice_input_pipeline::{VoiceInputPipeline, VoiceInputPipelineConfig};
@@ -10,14 +10,14 @@ use crate::VoiceDecoder;
 pub struct VoiceInputOutputManager {
     send_tx: Sender<Vec<u8>>,
     input_pipeline: Option<VoiceInputPipeline>,
-    output_decoders: Arc<Mutex<HashMap<u64, (u32, Arc<VoiceDecoder>)>>>,
+    output_decoders: Arc<DashMap<u64, (u32, Arc<VoiceDecoder>)>>,
 
     _packet_processor_handle: tokio::task::JoinHandle<()>,
 }
 
 impl VoiceInputOutputManager {
     pub fn new(send_tx: Sender<Vec<u8>>, receive_tx: Receiver<(PacketId, Vec<u8>)>) -> Self {
-        let output_decoders = Arc::new(Mutex::new(HashMap::new()));
+        let output_decoders = Arc::new(DashMap::new());
 
         // Spawn async task to process incoming voice packets
         let packet_processor_handle = tokio::spawn(Self::process_incoming_packets(
@@ -63,10 +63,9 @@ impl VoiceInputOutputManager {
     /// If decoder exists and sample rate matches, returns existing decoder
     /// If sample rate changed, creates new decoder with new sample rate
     pub fn get_voice_output_for(&mut self, user_id: u64, output_sample_rate: u32) -> Arc<VoiceDecoder> {
-        let mut decoders = self.output_decoders.lock().unwrap();
-
         // Check if decoder exists for this user
-        if let Some((current_sample_rate, decoder)) = decoders.get(&user_id) {
+        if let Some(entry) = self.output_decoders.get(&user_id) {
+            let (current_sample_rate, decoder) = entry.value();
             // If sample rate matches, return existing decoder
             if *current_sample_rate == output_sample_rate {
                 return Arc::clone(decoder);
@@ -83,7 +82,7 @@ impl VoiceInputOutputManager {
         );
 
         // Store decoder with its sample rate
-        decoders.insert(user_id, (output_sample_rate, Arc::clone(&decoder)));
+        self.output_decoders.insert(user_id, (output_sample_rate, Arc::clone(&decoder)));
 
         info!("Created voice decoder for user {} with sample rate {}", user_id, output_sample_rate);
 
@@ -91,20 +90,18 @@ impl VoiceInputOutputManager {
     }
 
     pub fn remove_voice_output_for(&mut self, user_id: u64) {
-        let mut decoders = self.output_decoders.lock().unwrap();
-        decoders.remove(&user_id);
+        self.output_decoders.remove(&user_id);
     }
 
     pub fn remove_all_voice_outputs(&mut self) {
-        let mut decoders = self.output_decoders.lock().unwrap();
-        decoders.clear();
+        self.output_decoders.clear();
     }
 
     /// Background task that processes incoming voice packets
     /// Runs until receive_tx is closed
     async fn process_incoming_packets(
         receive_rx: Receiver<(PacketId, Vec<u8>)>,
-        output_decoders: Arc<Mutex<HashMap<u64, (u32, Arc<VoiceDecoder>)>>>,
+        output_decoders: Arc<DashMap<u64, (u32, Arc<VoiceDecoder>)>>,
     ) {
         info!("Voice packet processor started");
 
@@ -129,8 +126,8 @@ impl VoiceInputOutputManager {
                     let user_id = voice_data.ssrc;
 
                     // Look up decoder for this user
-                    let decoders = output_decoders.lock().unwrap();
-                    if let Some((_, decoder)) = decoders.get(&user_id) {
+                    if let Some(entry) = output_decoders.get(&user_id) {
+                        let (_, decoder) = entry.value();
                         // Insert packet into the decoder's NetEQ buffer
                         if let Err(e) = decoder.insert_packet(voice_data) {
                             error!("Failed to insert packet for user {}: {}", user_id, e);
