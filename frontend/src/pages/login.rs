@@ -184,9 +184,7 @@ impl Page for LoginPage {
                 }
                 _ => {}
             },
-            _ => {
-                debug!("Ignored message in login page: {:?}", message);
-            }
+            _ => {}
         }
         Task::none()
     }

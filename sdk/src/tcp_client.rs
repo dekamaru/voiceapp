@@ -111,6 +111,8 @@ impl TcpClient {
             let mut read_buf = [0u8; 4096];
             let mut pending_responses: HashMap<PacketId, oneshot::Sender<Vec<u8>>> =
                 HashMap::new();
+            // Buffer to accumulate partial packets across reads
+            let mut accumulator: Vec<u8> = Vec::new();
 
             loop {
                 tokio::select! {
@@ -132,7 +134,8 @@ impl TcpClient {
                             result,
                             &read_buf,
                             &mut pending_responses,
-                            &packet_tx
+                            &packet_tx,
+                            &mut accumulator
                         ).await {
                             Ok(should_continue) => {
                                 if !should_continue {
@@ -183,21 +186,50 @@ impl TcpClient {
         read_buf: &[u8],
         pending_responses: &mut HashMap<PacketId, oneshot::Sender<Vec<u8>>>,
         packet_tx: &Sender<(PacketId, Vec<u8>)>,
+        accumulator: &mut Vec<u8>,
     ) -> Result<bool, String> {
         match read_result {
             Ok(0) => { Ok(false) }
             Ok(n) => {
-                let (packet_id, payload) = voiceapp_protocol::parse_packet(&read_buf[..n])
-                    .map_err(|e| format!("Parse error: {}", e))?;
+                // Append new data to accumulator
+                accumulator.extend_from_slice(&read_buf[..n]);
 
-                debug!("Received TCP packet: {:?}", packet_id);
+                // Parse all complete packets from the accumulator
+                loop {
+                    if accumulator.len() < 3 {
+                        // Not enough data for packet header, wait for more data
+                        break;
+                    }
 
-                // Check if this is a pending response
-                if let Some(tx) = pending_responses.remove(&packet_id) {
-                    let _ = tx.send(payload.to_vec());
+                    // Check if we have a complete packet
+                    let payload_len = u16::from_be_bytes([accumulator[1], accumulator[2]]) as usize;
+                    let total_packet_size = 3 + payload_len;
+
+                    if accumulator.len() < total_packet_size {
+                        // Incomplete packet, wait for more data
+                        break;
+                    }
+
+                    // We have a complete packet, parse it
+                    match voiceapp_protocol::parse_packet(&accumulator[..total_packet_size]) {
+                        Ok((packet_id, payload)) => {
+                            debug!("Received TCP packet: {:?}", packet_id);
+
+                            // Check if this is a pending response
+                            if let Some(tx) = pending_responses.remove(&packet_id) {
+                                let _ = tx.send(payload.to_vec());
+                            }
+
+                            let _ = packet_tx.send((packet_id, payload.to_vec())).await;
+
+                            // Remove the processed packet from the accumulator
+                            accumulator.drain(..total_packet_size);
+                        }
+                        Err(e) => {
+                            return Err(format!("Parse error: {}", e));
+                        }
+                    }
                 }
-
-                let _ = packet_tx.send((packet_id, payload.to_vec())).await;
 
                 Ok(true)
             }

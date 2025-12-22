@@ -132,14 +132,7 @@ impl EventHandler {
                 Self::handle_user_left_voice(payload, state, event_tx).await
             }
             PacketId::UserSentMessage => Self::handle_user_sent_message(payload, event_tx).await,
-            _ => {
-                // Ignore non-event packets
-                debug!(
-                    "Received non-event packet in event stream: {:?}",
-                    packet_id
-                );
-                Ok(())
-            }
+            _ => { Ok(()) }
         }
     }
 
@@ -299,7 +292,6 @@ impl EventHandler {
             })
             .await;
 
-        debug!("User sent message: id={}, timestamp={}", user_id, timestamp);
         Ok(())
     }
 }

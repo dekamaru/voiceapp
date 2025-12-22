@@ -491,9 +491,7 @@ impl Page for RoomPage {
                         warn!("Failed to send message: {}", e);
                     }
                 }
-                _ => {
-                    debug!("Ignoring voice command result in room page: {:?}", result);
-                }
+                _ => {}
             },
             Message::ServerEventReceived(event) => match event {
                 VoiceClientEvent::ParticipantsList {
@@ -550,9 +548,7 @@ impl Page for RoomPage {
                     }
                 }
             },
-            _ => {
-                debug!("Ignoring event in RoomPage {:?}", message);
-            }
+            _ => {}
         }
 
         Task::none()
