@@ -14,8 +14,10 @@ pub enum Message {
     LoginPage(LoginPageMessage),
     RoomPage(RoomPageMessage),
     SettingsPage(SettingsPageMessage),
-
     SwitchPage(PageType),
+
+    // Audio manager
+    MuteInput(bool),
 
     // Voice client message bus
     ExecuteVoiceCommand(VoiceCommand),
@@ -265,6 +267,15 @@ impl Application {
                             error!("Failed to create output stream for user {}: {}", user_id, e);
                         }
                     };
+                }
+
+                Task::none()
+            },
+            Message::MuteInput(muted) => {
+                if *muted {
+                    self.audio_manager.mute_input();
+                } else {
+                    self.audio_manager.unmute_input();
                 }
 
                 Task::none()

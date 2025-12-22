@@ -1,5 +1,6 @@
 use cpal::Stream;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 use voiceapp_sdk::VoiceClient;
@@ -15,6 +16,7 @@ pub struct AudioManager {
     input_stream: Option<Stream>,
     input_receiver_task: Option<JoinHandle<()>>,
     output_streams: std::collections::HashMap<u64, AudioOutputHandle>,
+    is_input_muted: Arc<AtomicBool>,
 }
 
 impl AudioManager {
@@ -26,6 +28,7 @@ impl AudioManager {
             input_stream: None,
             input_receiver_task: None,
             output_streams: std::collections::HashMap::new(),
+            is_input_muted: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -38,13 +41,17 @@ impl AudioManager {
         // Create the input stream and get actual sample rate
         let (stream, mut receiver) = create_input_stream(config.audio.input_device.clone())?;
         let voice_input_tx = self.voice_client.get_voice_input_sender(config.audio.input_device.sample_rate as usize)?;
+        let is_muted = Arc::clone(&self.is_input_muted);
 
         // Spawn task to read from CPAL receiver and forward to voice input
         let task = tokio::spawn(async move {
             while let Some(frame) = receiver.recv().await {
-                if let Err(e) = voice_input_tx.send(frame).await {
-                    error!("Failed to send audio frame to pipeline: {}", e);
-                    break;
+                // Skip sending if muted (lock-free check)
+                if !is_muted.load(Ordering::Relaxed) {
+                    if let Err(e) = voice_input_tx.send(frame).await {
+                        error!("Failed to send audio frame to pipeline: {}", e);
+                        break;
+                    }
                 }
             }
             debug!("Audio receiver task ended");
@@ -106,5 +113,15 @@ impl AudioManager {
 
         self.output_streams.clear();
         let _ = self.voice_client.remove_all_voice_outputs();
+    }
+
+    pub fn mute_input(&self) {
+        self.is_input_muted.store(true, Ordering::Relaxed);
+        info!("Input muted");
+    }
+
+    pub fn unmute_input(&self) {
+        self.is_input_muted.store(false, Ordering::Relaxed);
+        info!("Input unmuted");
     }
 }

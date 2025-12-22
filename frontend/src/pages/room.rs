@@ -440,6 +440,8 @@ impl Page for RoomPage {
             Message::RoomPage(room_message) => match room_message {
                 RoomPageMessage::MuteToggle => {
                     self.muted = !self.muted;
+
+                    return Task::done(Message::MuteInput(self.muted));
                 }
                 RoomPageMessage::JoinLeaveToggle => {
                     if self.is_in_voice() {
