@@ -5,7 +5,9 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 use voiceapp_sdk::VoiceClient;
 
+use crate::audio::audio_source::VoiceDecoderSource;
 use crate::audio::input::create_input_stream;
+use crate::audio::notification_player::NotificationPlayer;
 use crate::audio::output::{create_output_stream, AudioOutputHandle};
 use crate::config::AppConfig;
 
@@ -17,6 +19,8 @@ pub struct AudioManager {
     input_receiver_task: Option<JoinHandle<()>>,
     output_streams: std::collections::HashMap<u64, AudioOutputHandle>,
     is_input_muted: Arc<AtomicBool>,
+    notification_player: Option<Arc<NotificationPlayer>>,
+    notification_stream: Option<AudioOutputHandle>,
 }
 
 impl AudioManager {
@@ -29,6 +33,8 @@ impl AudioManager {
             input_receiver_task: None,
             output_streams: std::collections::HashMap::new(),
             is_input_muted: Arc::new(AtomicBool::new(false)),
+            notification_player: None,
+            notification_stream: None,
         }
     }
 
@@ -86,7 +92,10 @@ impl AudioManager {
 
         let config = self.app_config.read().unwrap();
         let decoder = self.voice_client.get_voice_output_for(user_id, config.audio.output_device.sample_rate.clone() as usize)?;
-        let output_handle = create_output_stream(config.audio.output_device.clone(), decoder)?;
+
+        // Wrap decoder in AudioSource trait adapter
+        let audio_source = Arc::new(VoiceDecoderSource::new(decoder));
+        let output_handle = create_output_stream(config.audio.output_device.clone(), audio_source)?;
         info!("Created output stream for user {} at {} Hz", user_id, config.audio.output_device.sample_rate.clone());
 
         // Store the output handle
@@ -113,6 +122,38 @@ impl AudioManager {
 
         self.output_streams.clear();
         let _ = self.voice_client.remove_all_voice_outputs();
+    }
+
+    /// Initialize (or reinitialize) notification player with current output device sample rate
+    /// Can be called multiple times to recreate the player when output device changes
+    pub fn init_notification_player(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let config = self.app_config.read().unwrap();
+        let sample_rate = config.audio.output_device.sample_rate;
+
+        info!("Initializing notification player with sample rate {} Hz", sample_rate);
+
+        // Create new notification player
+        let notification_player = Arc::new(NotificationPlayer::new(sample_rate));
+
+        // Create dedicated output stream for notifications
+        let notification_stream = create_output_stream(
+            config.audio.output_device.clone(),
+            notification_player.clone()
+        )?;
+
+        // Replace existing player and stream (if any)
+        self.notification_player = Some(notification_player);
+        self.notification_stream = Some(notification_stream);
+
+        info!("Notification player initialized successfully");
+        Ok(())
+    }
+
+    /// Play a notification sound (if notification player is initialized)
+    pub fn play_notification(&self, sound_id: &str) {
+        if let Some(player) = &self.notification_player {
+            player.play(sound_id);
+        }
     }
 
     pub fn mute_input(&self) {

@@ -2,7 +2,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, SampleFormat, SampleRate, Stream, StreamConfig};
 use std::sync::Arc;
 use tracing::{error, info, warn};
-use voiceapp_sdk::VoiceDecoder;
+use crate::audio::audio_source::AudioSource;
 use crate::config::AudioDevice;
 
 /// Handle to manage audio output stream for a single user
@@ -57,11 +57,11 @@ pub fn find_best_output_stream_config(
     Ok((first_config.min_sample_rate(), first_config.sample_format(), first_config.channels()))
 }
 
-/// Create output stream for playing back audio from a specific user
+/// Create output stream for playing back audio from an audio source
 /// Returns (AudioOutputHandle, sample_rate)
 pub fn create_output_stream(
     device_config: AudioDevice,
-    decoder: Arc<VoiceDecoder>,
+    audio_source: Arc<dyn AudioSource>,
 ) -> Result<AudioOutputHandle, Box<dyn std::error::Error>> {
     let device = match find_output_device_by_name(device_config.device_name.clone())? {
         Some(dev) => dev,
@@ -84,14 +84,14 @@ pub fn create_output_stream(
     let stream = match device_config.sample_format.as_str() {
         "f32" => {
             let mut leftover: Vec<f32> = Vec::new();
-            let decoder_clone = decoder.clone();
+            let audio_source_clone = audio_source.clone();
             device.build_output_stream(
                 &stream_config,
                 move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     // Convert mono to stereo/multi-channel
                     let frame_count = output.len() / channels;
                     let mut mono_buffer = vec![0.0f32; frame_count];
-                    fill_output(&mut mono_buffer, &decoder_clone, &mut leftover, volume);
+                    fill_output(&mut mono_buffer, &audio_source_clone, &mut leftover, volume);
                     for i in 0..frame_count {
                         for ch in 0..channels {
                             output[i * channels + ch] = mono_buffer[i];
@@ -104,14 +104,14 @@ pub fn create_output_stream(
         }
         "i16" => {
             let mut leftover: Vec<f32> = Vec::new();
-            let decoder_clone = decoder.clone();
+            let audio_source_clone = audio_source.clone();
             device.build_output_stream(
                 &stream_config,
                 move |output: &mut [i16], _: &cpal::OutputCallbackInfo| {
                     // Convert mono to stereo/multi-channel
                     let frame_count = output.len() / channels;
                     let mut mono_buffer = vec![0.0f32; frame_count];
-                    fill_output(&mut mono_buffer, &decoder_clone, &mut leftover, volume);
+                    fill_output(&mut mono_buffer, &audio_source_clone, &mut leftover, volume);
                     for i in 0..frame_count {
                         let sample = (mono_buffer[i].clamp(-1.0, 1.0) * 32767.0) as i16;
                         for ch in 0..channels {
@@ -125,14 +125,14 @@ pub fn create_output_stream(
         }
         "u16" => {
             let mut leftover: Vec<f32> = Vec::new();
-            let decoder_clone = decoder.clone();
+            let audio_source_clone = audio_source.clone();
             device.build_output_stream(
                 &stream_config,
                 move |output: &mut [u16], _: &cpal::OutputCallbackInfo| {
                     // Convert mono to stereo/multi-channel
                     let frame_count = output.len() / channels;
                     let mut mono_buffer = vec![0.0f32; frame_count];
-                    fill_output(&mut mono_buffer, &decoder_clone, &mut leftover, volume);
+                    fill_output(&mut mono_buffer, &audio_source_clone, &mut leftover, volume);
                     for i in 0..frame_count {
                         let sample = ((mono_buffer[i].clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16;
                         for ch in 0..channels {
@@ -157,7 +157,7 @@ pub fn create_output_stream(
 
 fn fill_output(
     buffer: &mut [f32],
-    decoder: &Arc<VoiceDecoder>,
+    audio_source: &Arc<dyn AudioSource>,
     leftover: &mut Vec<f32>,
     volume: f32,
 ) {
@@ -165,7 +165,7 @@ fn fill_output(
 
     while idx < buffer.len() {
         if leftover.is_empty() {
-            match decoder.get_audio() {
+            match audio_source.get_audio() {
                 Ok(frame) => {
                     leftover.extend_from_slice(&frame);
                 }

@@ -93,7 +93,10 @@ impl Application {
         };
 
         let config = Arc::new(RwLock::new(config));
-        let audio_manager = AudioManager::new(config.clone(), voice_client.clone());
+        let mut audio_manager = AudioManager::new(config.clone(), voice_client.clone());
+        if let Err(e) = audio_manager.init_notification_player() {
+            error!("failed to initialize notification player: {}", e);
+        };
 
         let mut pages = HashMap::<PageType, Box<dyn Page>>::from([
             (PageType::Login, Box::new(LoginPage::new(config.clone())) as Box<dyn Page>),
@@ -131,6 +134,7 @@ impl Application {
                 Task::done(Message::SwitchPage(PageType::Room))
             }
             Message::VoiceCommandResult(VoiceCommandResult::JoinVoiceChannel(Ok(()))) => {
+                self.audio_manager.play_notification("join_voice");
                 // Start audio when join succeeds
                 let users_in_voice = self.voice_client.get_users_in_voice();
 
@@ -149,6 +153,7 @@ impl Application {
                 Task::none()
             }
             Message::VoiceCommandResult(VoiceCommandResult::LeaveVoiceChannel(Ok(()))) => {
+                self.audio_manager.play_notification("leave_voice");
                 // Stop audio when leave succeeds
                 self.audio_manager.stop_recording();
                 self.audio_manager.remove_all_output_streams();
@@ -158,6 +163,7 @@ impl Application {
             Message::ServerEventReceived(VoiceClientEvent::UserJoinedVoice { user_id }) => {
                 // Create output stream for new user in voice
                 if self.voice_client.is_in_voice_channel() {
+                    self.audio_manager.play_notification("join_voice");
                     if let Err(e) = self.audio_manager.create_output_stream_for_user(*user_id) {
                         error!("Failed to create output stream for user {}: {}", user_id, e);
                     };
@@ -167,6 +173,7 @@ impl Application {
             }
             Message::ServerEventReceived(VoiceClientEvent::UserLeftVoice { user_id }) => {
                 if self.voice_client.is_in_voice_channel() {
+                    self.audio_manager.play_notification("leave_voice");
                     self.audio_manager.remove_output_stream_for_user(*user_id);
                 }
 
@@ -256,6 +263,13 @@ impl Application {
                     config.audio.output_device.channels = best_config.2;
                 });
 
+                if let Err(e) = self.audio_manager.init_notification_player() {
+                    error!("failed to initialize notification player: {}", e);
+                };
+
+                // Sound feedback on notification player change
+                self.audio_manager.play_notification("unmute");
+
                 // Refresh input in case if it's changed
                 if self.voice_client.is_in_voice_channel() {
                     self.audio_manager.remove_all_output_streams();
@@ -274,8 +288,10 @@ impl Application {
             Message::MuteInput(muted) => {
                 if *muted {
                     self.audio_manager.mute_input();
+                    self.audio_manager.play_notification("mute");
                 } else {
                     self.audio_manager.unmute_input();
+                    self.audio_manager.play_notification("unmute");
                 }
 
                 Task::none()

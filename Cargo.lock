@@ -4205,10 +4205,11 @@ dependencies = [
 name = "voiceapp-frontend"
 version = "0.1.0"
 dependencies = [
- "async-channel",
  "chrono",
  "cpal 0.16.0",
+ "hound",
  "iced",
+ "rubato",
  "serde",
  "tokio",
  "tokio-stream",
