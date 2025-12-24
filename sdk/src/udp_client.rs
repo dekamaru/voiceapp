@@ -76,7 +76,7 @@ impl UdpClient {
         decoder: F,
     ) -> Result<T, VoiceClientError>
     where
-        F: Fn(&[u8]) -> std::io::Result<T>,
+        F: Fn(&[u8]) -> Result<T, voiceapp_protocol::ProtocolError>,
     {
         for attempt in 1..=MAX_RETRY_ATTEMPTS {
             debug!(

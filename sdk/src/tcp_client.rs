@@ -83,7 +83,7 @@ impl TcpClient {
         decoder: F,
     ) -> Result<T, VoiceClientError>
     where
-        F: Fn(&[u8]) -> std::io::Result<T>,
+        F: Fn(&[u8]) -> Result<T, voiceapp_protocol::ProtocolError>,
     {
         let (response_tx, response_rx) = oneshot::channel();
 
