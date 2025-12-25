@@ -6,7 +6,7 @@ use crate::pages::settings::{SettingsPage, SettingsPageMessage};
 use iced::Task;
 use std::sync::{Arc, RwLock};
 use tracing::{error, info};
-use voiceapp_sdk::{VoiceClient, VoiceClientEvent};
+use voiceapp_sdk::{Client, ClientEvent};
 use crate::config::AppConfig;
 
 #[derive(Debug, Clone)]
@@ -22,7 +22,7 @@ pub enum Message {
     // Voice client message bus
     ExecuteVoiceCommand(VoiceCommand),
     VoiceCommandResult(VoiceCommandResult),
-    ServerEventReceived(VoiceClientEvent),
+    ServerEventReceived(ClientEvent),
     VoiceInputSamplesReceived(Vec<f32>),
 
     // Keyboard events
@@ -66,7 +66,7 @@ pub enum PageType {
 pub struct Application {
     pages: HashMap<PageType, Box<dyn Page>>,
     current_page: PageType,
-    voice_client: Arc<VoiceClient>,
+    voice_client: Arc<Client>,
     audio_manager: AudioManager,
     config: Arc<RwLock<AppConfig>>,
 }
@@ -74,7 +74,7 @@ pub struct Application {
 impl Application {
     pub fn new() -> (Self, Task<Message>) {
         let config = AppConfig::load().unwrap();
-        let voice_client = Arc::new(VoiceClient::new());
+        let voice_client = Arc::new(Client::new());
         let events_task = Task::run(voice_client.event_stream(), |e| Message::ServerEventReceived(e));
         let auto_login_task = if config.server.is_credentials_filled() {
             info!("Credentials read from config, performing auto login");
@@ -160,7 +160,7 @@ impl Application {
 
                 Task::none()
             }
-            Message::ServerEventReceived(VoiceClientEvent::UserJoinedVoice { user_id }) => {
+            Message::ServerEventReceived(ClientEvent::UserJoinedVoice { user_id }) => {
                 // Create output stream for new user in voice
                 if self.voice_client.is_in_voice_channel() {
                     self.audio_manager.play_notification("join_voice");
@@ -171,7 +171,7 @@ impl Application {
 
                 Task::none()
             }
-            Message::ServerEventReceived(VoiceClientEvent::UserLeftVoice { user_id }) => {
+            Message::ServerEventReceived(ClientEvent::UserLeftVoice { user_id }) => {
                 if self.voice_client.is_in_voice_channel() {
                     self.audio_manager.play_notification("leave_voice");
                     self.audio_manager.remove_output_stream_for_user(*user_id);

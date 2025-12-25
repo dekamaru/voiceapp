@@ -7,5 +7,4 @@ mod output;
 pub use audio_manager::AudioManager;
 pub use audio_source::{AudioSource, VoiceDecoderSource};
 pub use input::{*};
-pub use notification_player::NotificationPlayer;
 pub use output::{*};

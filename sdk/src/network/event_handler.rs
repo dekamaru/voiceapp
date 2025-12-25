@@ -7,7 +7,7 @@ use voiceapp_protocol::{Packet, ParticipantInfo};
 
 /// Events emitted by VoiceClient when state changes occur
 #[derive(Debug, Clone)]
-pub enum VoiceClientEvent {
+pub enum ClientEvent {
     /// Initial participant list sent after successful connection
     ParticipantsList {
         user_id: u64,
@@ -39,8 +39,8 @@ pub struct ClientState {
 /// Handles TCP event processing and emits client events
 pub struct EventHandler {
     state: Arc<RwLock<ClientState>>,
-    event_tx: Sender<VoiceClientEvent>,
-    event_rx: Receiver<VoiceClientEvent>,
+    event_tx: Sender<ClientEvent>,
+    event_rx: Receiver<ClientEvent>,
 }
 
 impl EventHandler {
@@ -63,7 +63,7 @@ impl EventHandler {
     }
 
     /// Get event stream for processed events
-    pub fn event_stream(&self) -> Receiver<VoiceClientEvent> {
+    pub fn event_stream(&self) -> Receiver<ClientEvent> {
         self.event_rx.clone()
     }
 
@@ -105,7 +105,7 @@ impl EventHandler {
     async fn handle_packet(
         packet: Packet,
         state: &Arc<RwLock<ClientState>>,
-        event_tx: &Sender<VoiceClientEvent>,
+        event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
         match packet {
             Packet::LoginResponse { request_id: _, id, voice_token: _, participants } => {
@@ -140,7 +140,7 @@ impl EventHandler {
         id: u64,
         participants: Vec<ParticipantInfo>,
         state: &Arc<RwLock<ClientState>>,
-        event_tx: &Sender<VoiceClientEvent>,
+        event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
         // Update client state with user_id and participants
         let mut s = state.write().await;
@@ -153,7 +153,7 @@ impl EventHandler {
 
         // Emit ParticipantsList event
         let _ = event_tx
-            .send(VoiceClientEvent::ParticipantsList {
+            .send(ClientEvent::ParticipantsList {
                 user_id: id,
                 participants,
             })
@@ -188,7 +188,7 @@ impl EventHandler {
     async fn handle_user_joined_server(
         participant: ParticipantInfo,
         state: &Arc<RwLock<ClientState>>,
-        event_tx: &Sender<VoiceClientEvent>,
+        event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
         let user_id = participant.user_id;
         let username = participant.username.clone();
@@ -198,7 +198,7 @@ impl EventHandler {
         drop(s);
 
         let _ = event_tx
-            .send(VoiceClientEvent::UserJoinedServer { user_id, username })
+            .send(ClientEvent::UserJoinedServer { user_id, username })
             .await;
 
         debug!("User joined server: id={}", user_id);
@@ -208,13 +208,13 @@ impl EventHandler {
     async fn handle_user_left_server(
         user_id: u64,
         state: &Arc<RwLock<ClientState>>,
-        event_tx: &Sender<VoiceClientEvent>,
+        event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
         let mut s = state.write().await;
         s.participants.remove(&user_id);
         drop(s);
 
-        let _ = event_tx.send(VoiceClientEvent::UserLeftServer { user_id }).await;
+        let _ = event_tx.send(ClientEvent::UserLeftServer { user_id }).await;
 
         debug!("User left server: id={}", user_id);
         Ok(())
@@ -223,7 +223,7 @@ impl EventHandler {
     async fn handle_user_joined_voice(
         user_id: u64,
         state: &Arc<RwLock<ClientState>>,
-        event_tx: &Sender<VoiceClientEvent>,
+        event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
         let mut s = state.write().await;
         if let Some(participant) = s.participants.get_mut(&user_id) {
@@ -232,7 +232,7 @@ impl EventHandler {
         drop(s);
 
         let _ = event_tx
-            .send(VoiceClientEvent::UserJoinedVoice { user_id })
+            .send(ClientEvent::UserJoinedVoice { user_id })
             .await;
 
         debug!("User joined voice: id={}", user_id);
@@ -242,7 +242,7 @@ impl EventHandler {
     async fn handle_user_left_voice(
         user_id: u64,
         state: &Arc<RwLock<ClientState>>,
-        event_tx: &Sender<VoiceClientEvent>,
+        event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
         let mut s = state.write().await;
         if let Some(participant) = s.participants.get_mut(&user_id) {
@@ -251,7 +251,7 @@ impl EventHandler {
         drop(s);
 
         let _ = event_tx
-            .send(VoiceClientEvent::UserLeftVoice { user_id })
+            .send(ClientEvent::UserLeftVoice { user_id })
             .await;
 
         debug!("User left voice: id={}", user_id);
@@ -262,10 +262,10 @@ impl EventHandler {
         user_id: u64,
         timestamp: u64,
         message: String,
-        event_tx: &Sender<VoiceClientEvent>,
+        event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
         let _ = event_tx
-            .send(VoiceClientEvent::UserSentMessage {
+            .send(ClientEvent::UserSentMessage {
                 user_id,
                 timestamp,
                 message,

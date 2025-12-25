@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
-use voiceapp_sdk::VoiceClient;
+use voiceapp_sdk::Client;
 
 use crate::audio::audio_source::VoiceDecoderSource;
 use crate::audio::input::create_input_stream;
@@ -14,7 +14,7 @@ use crate::config::AppConfig;
 /// Audio manager that handles recording and playback lifecycle
 pub struct AudioManager {
     app_config: Arc<RwLock<AppConfig>>,
-    voice_client: Arc<VoiceClient>,
+    voice_client: Arc<Client>,
     input_stream: Option<Stream>,
     input_receiver_task: Option<JoinHandle<()>>,
     output_streams: std::collections::HashMap<u64, AudioOutputHandle>,
@@ -25,7 +25,7 @@ pub struct AudioManager {
 
 impl AudioManager {
     /// Create a new AudioManager with UDP send channel and decoder manager
-    pub fn new(app_config: Arc<RwLock<AppConfig>>, voice_client: Arc<VoiceClient>) -> Self {
+    pub fn new(app_config: Arc<RwLock<AppConfig>>, voice_client: Arc<Client>) -> Self {
         Self {
             app_config,
             voice_client,
@@ -46,7 +46,7 @@ impl AudioManager {
 
         // Create the input stream and get actual sample rate
         let (stream, mut receiver) = create_input_stream(config.audio.input_device.clone())?;
-        let voice_input_tx = self.voice_client.get_voice_input_sender(config.audio.input_device.sample_rate as usize)?;
+        let voice_input_tx = self.voice_client.get_voice_input_sender(config.audio.input_device.sample_rate)?;
         let is_muted = Arc::clone(&self.is_input_muted);
 
         // Spawn task to read from CPAL receiver and forward to voice input

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use voiceapp_sdk::VoiceDecoder;
+use voiceapp_sdk::Decoder;
 
 /// Trait for audio sources that can provide audio samples
 /// This abstraction allows both VoiceDecoder and NotificationPlayer
@@ -12,17 +12,17 @@ pub trait AudioSource: Send + Sync {
 
 /// Wrapper to make VoiceDecoder implement AudioSource trait
 pub struct VoiceDecoderSource {
-    decoder: Arc<VoiceDecoder>,
+    decoder: Arc<Decoder>,
 }
 
 impl VoiceDecoderSource {
-    pub fn new(decoder: Arc<VoiceDecoder>) -> Self {
+    pub fn new(decoder: Arc<Decoder>) -> Self {
         Self { decoder }
     }
 }
 
 impl AudioSource for VoiceDecoderSource {
     fn get_audio(&self) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
-        self.decoder.get_audio().map_err(|e| e.into())
+        self.decoder.get_decoded_audio().map_err(|e| e.into())
     }
 }

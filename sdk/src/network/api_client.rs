@@ -2,9 +2,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 use voiceapp_protocol::Packet;
 
-use crate::error::VoiceClientError;
-use crate::tcp_client::TcpClient;
-use crate::udp_client::UdpClient;
+use crate::error::ClientError;
+use super::tcp_client::TcpClient;
+use super::udp_client::UdpClient;
 
 /// ServerApi handles all request/response communication with the server
 pub struct ApiClient {
@@ -30,7 +30,7 @@ impl ApiClient {
 
     /// Authenticate with management server via TCP
     /// Returns the voice_token needed for UDP voice authentication
-    pub async fn authenticate_management(&self, username: &str) -> Result<u64, VoiceClientError> {
+    pub async fn authenticate_management(&self, username: &str) -> Result<u64, ClientError> {
         let request_id = self.next_request_id();
         let request = Packet::LoginRequest {
             request_id,
@@ -59,7 +59,7 @@ impl ApiClient {
     }
 
     /// Authenticate with voice server via UDP
-    pub async fn authenticate_voice(&self, voice_token: u64) -> Result<(), VoiceClientError> {
+    pub async fn authenticate_voice(&self, voice_token: u64) -> Result<(), ClientError> {
         let request_id = self.next_request_id();
         let request = Packet::VoiceAuthRequest { request_id, voice_token };
 
@@ -78,7 +78,7 @@ impl ApiClient {
             .await?;
 
         if !success {
-            return Err(VoiceClientError::ConnectionFailed(
+            return Err(ClientError::ConnectionFailed(
                 "Voice auth denied".to_string(),
             ));
         }
@@ -89,7 +89,7 @@ impl ApiClient {
     }
 
     /// Join voice channel
-    pub async fn join_channel(&self) -> Result<(), VoiceClientError> {
+    pub async fn join_channel(&self) -> Result<(), ClientError> {
         let request_id = self.next_request_id();
         let request = Packet::JoinVoiceChannelRequest { request_id };
 
@@ -99,7 +99,7 @@ impl ApiClient {
     }
 
     /// Leave voice channel
-    pub async fn leave_channel(&self) -> Result<(), VoiceClientError> {
+    pub async fn leave_channel(&self) -> Result<(), ClientError> {
         let request_id = self.next_request_id();
         let request = Packet::LeaveVoiceChannelRequest { request_id };
 
@@ -109,7 +109,7 @@ impl ApiClient {
     }
 
     /// Send chat message
-    pub async fn send_message(&self, message: &str) -> Result<(), VoiceClientError> {
+    pub async fn send_message(&self, message: &str) -> Result<(), ClientError> {
         let request_id = self.next_request_id();
         let request = Packet::ChatMessageRequest {
             request_id,

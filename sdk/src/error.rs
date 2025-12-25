@@ -1,6 +1,6 @@
 /// Errors that can occur with VoiceClient
 #[derive(Debug, Clone)]
-pub enum VoiceClientError {
+pub enum ClientError {
     ConnectionFailed(String),
     Disconnected,
     Timeout(String),
@@ -8,16 +8,16 @@ pub enum VoiceClientError {
     VoiceInputOutputManagerError(String),
 }
 
-impl std::fmt::Display for VoiceClientError {
+impl std::fmt::Display for ClientError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VoiceClientError::ConnectionFailed(msg) => write!(f, "Connection failed: {}", msg),
-            VoiceClientError::Disconnected => write!(f, "Disconnected from server"),
-            VoiceClientError::Timeout(msg) => write!(f, "Timeout exceeded {}", msg),
-            VoiceClientError::SystemError(msg) => write!(f, "System error: {}", msg),
-            VoiceClientError::VoiceInputOutputManagerError(msg) => write!(f, "Voice I/O manager error: {}", msg),
+            ClientError::ConnectionFailed(msg) => write!(f, "Connection failed: {}", msg),
+            ClientError::Disconnected => write!(f, "Disconnected from server"),
+            ClientError::Timeout(msg) => write!(f, "Timeout exceeded {}", msg),
+            ClientError::SystemError(msg) => write!(f, "System error: {}", msg),
+            ClientError::VoiceInputOutputManagerError(msg) => write!(f, "Voice I/O manager error: {}", msg),
         }
     }
 }
 
-impl std::error::Error for VoiceClientError {}
+impl std::error::Error for ClientError {}

@@ -3,52 +3,42 @@ use async_channel::{unbounded, Receiver, Sender};
 use dashmap::DashMap;
 use tracing::{error, info};
 use voiceapp_protocol::Packet;
-use crate::voice_input_pipeline::{VoiceInputPipeline, VoiceInputPipelineConfig};
-use crate::voice_decoder::VoiceData;
-use crate::VoiceDecoder;
+use crate::voice::input_pipeline::{InputPipeline};
+use crate::voice::decoder::VoiceData;
+use crate::Decoder;
 
 /// Manages voice input and output with dynamic sample rate configuration
-pub struct VoiceInputOutputManager {
+pub struct InputOutputManager {
     send_tx: Sender<Vec<u8>>,
-    input_pipeline: Option<VoiceInputPipeline>,
-    output_decoders: Arc<DashMap<u64, (u32, Arc<VoiceDecoder>)>>,
-
-    _packet_processor_handle: tokio::task::JoinHandle<()>,
+    input_pipeline: Option<InputPipeline>,
+    output_decoders: Arc<DashMap<u64, (u32, Arc<Decoder>)>>,
 }
 
-impl VoiceInputOutputManager {
+impl InputOutputManager {
     pub fn new(send_tx: Sender<Vec<u8>>, receive_tx: Receiver<Packet>) -> Self {
         let output_decoders = Arc::new(DashMap::new());
 
         // Spawn async task to process incoming voice packets
-        let packet_processor_handle = tokio::spawn(Self::process_incoming_packets(
-            receive_tx,
-            Arc::clone(&output_decoders),
-        ));
+        tokio::spawn(Self::process_incoming_packets(receive_tx, Arc::clone(&output_decoders)));
 
-        VoiceInputOutputManager {
+        InputOutputManager {
             send_tx,
             input_pipeline: None,
-            output_decoders,
-            _packet_processor_handle: packet_processor_handle,
+            output_decoders
         }
     }
 
     /// Get the voice input sender for external audio sources
     /// External sources can change, but they all write to the same stream
-    pub fn get_voice_input_sender(&mut self, input_sample_rate: usize) -> Result<Sender<Vec<f32>>, String> {
+    pub fn get_voice_input_sender(&mut self, input_sample_rate: u32) -> Result<Sender<Vec<f32>>, String> {
         // Drop the old pipeline
         self.input_pipeline = None;
 
         // Create a new channel for the new pipeline
         let (new_tx, new_rx) = unbounded();
 
-        let config = VoiceInputPipelineConfig {
-            sample_rate: input_sample_rate,
-        };
-
-        let pipeline = VoiceInputPipeline::new(
-            config,
+        let pipeline = InputPipeline::new(
+            input_sample_rate,
             new_rx,
             self.send_tx.clone(),
         )?;
@@ -63,7 +53,7 @@ impl VoiceInputOutputManager {
     /// Get or create a voice output decoder for a specific user
     /// If decoder exists and sample rate matches, returns existing decoder
     /// If sample rate changed, creates new decoder with new sample rate
-    pub fn get_voice_output_for(&mut self, user_id: u64, output_sample_rate: u32) -> Arc<VoiceDecoder> {
+    pub fn get_voice_output_for(&mut self, user_id: u64, output_sample_rate: u32) -> Arc<Decoder> {
         // Check if decoder exists for this user
         if let Some(entry) = self.output_decoders.get(&user_id) {
             let (current_sample_rate, decoder) = entry.value();
@@ -78,7 +68,7 @@ impl VoiceInputOutputManager {
 
         // Create new decoder with the specified sample rate
         let decoder = Arc::new(
-            VoiceDecoder::new(output_sample_rate)
+            Decoder::new(output_sample_rate)
                 .expect("Failed to create voice decoder")
         );
 
@@ -102,7 +92,7 @@ impl VoiceInputOutputManager {
     /// Runs until receive_tx is closed
     async fn process_incoming_packets(
         receive_rx: Receiver<Packet>,
-        output_decoders: Arc<DashMap<u64, (u32, Arc<VoiceDecoder>)>>,
+        output_decoders: Arc<DashMap<u64, (u32, Arc<Decoder>)>>,
     ) {
         info!("Voice packet processor started");
 
@@ -115,7 +105,7 @@ impl VoiceInputOutputManager {
                         let voice_data = VoiceData {
                             sequence,
                             timestamp,
-                            ssrc: user_id,
+                            user_id,
                             opus_frame: data,
                         };
 
@@ -123,7 +113,7 @@ impl VoiceInputOutputManager {
                         if let Some(entry) = output_decoders.get(&user_id) {
                             let (_, decoder) = entry.value();
                             // Insert packet into the decoder's NetEQ buffer
-                            if let Err(e) = decoder.insert_packet(voice_data) {
+                            if let Err(e) = decoder.consume_voice_data(voice_data) {
                                 error!("Failed to insert packet for user {}: {}", user_id, e);
                             }
                         }

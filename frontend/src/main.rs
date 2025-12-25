@@ -44,7 +44,7 @@ fn main() -> iced::Result {
 fn configure_logging() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::new("voiceapp_frontend=info,voiceapp_sdk=info")
+            EnvFilter::new("voiceapp_frontend=debug,voiceapp_sdk=debug")
         )
         .init();
 

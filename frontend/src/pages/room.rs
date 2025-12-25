@@ -18,7 +18,7 @@ use iced::widget::{
 use iced::{border, Alignment, Background, Border, Color, Element, Length, Padding, Task, Theme};
 use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, warn};
-use voiceapp_sdk::{ParticipantInfo, VoiceClientEvent};
+use voiceapp_sdk::{ParticipantInfo, ClientEvent};
 
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
@@ -496,7 +496,7 @@ impl Page for RoomPage {
                 _ => {}
             },
             Message::ServerEventReceived(event) => match event {
-                VoiceClientEvent::ParticipantsList {
+                ClientEvent::ParticipantsList {
                     user_id,
                     participants,
                 } => {
@@ -506,7 +506,7 @@ impl Page for RoomPage {
                         .map(|info| (info.user_id, info))
                         .collect();
                 }
-                VoiceClientEvent::UserJoinedServer { user_id, username } => {
+                ClientEvent::UserJoinedServer { user_id, username } => {
                     debug!("User {} joined server", username);
                     self.participants.insert(
                         user_id,
@@ -517,23 +517,23 @@ impl Page for RoomPage {
                         },
                     );
                 }
-                VoiceClientEvent::UserJoinedVoice { user_id } => {
+                ClientEvent::UserJoinedVoice { user_id } => {
                     debug!("User {} joined voice", user_id);
                     if let Some(user) = self.participants.get_mut(&user_id) {
                         user.in_voice = true;
                     }
                 }
-                VoiceClientEvent::UserLeftVoice { user_id } => {
+                ClientEvent::UserLeftVoice { user_id } => {
                     debug!("User {} left voice", user_id);
                     if let Some(user) = self.participants.get_mut(&user_id) {
                         user.in_voice = false;
                     }
                 }
-                VoiceClientEvent::UserLeftServer { user_id } => {
+                ClientEvent::UserLeftServer { user_id } => {
                     debug!("User {} left server", user_id);
                     self.participants.remove(&user_id);
                 }
-                VoiceClientEvent::UserSentMessage {
+                ClientEvent::UserSentMessage {
                     user_id,
                     timestamp,
                     message,
