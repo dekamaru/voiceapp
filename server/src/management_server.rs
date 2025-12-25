@@ -22,6 +22,7 @@ pub struct User {
     pub id: u64,
     pub username: String,
     pub in_voice: bool,
+    pub is_muted: bool,
     pub token: u64, // Authentication token for UDP connections
 }
 
@@ -190,6 +191,9 @@ impl ManagementServer {
             Packet::ChatMessageRequest { request_id, message } => {
                 self.handle_chat_message_request(socket, peer_addr, request_id, message).await
             }
+            Packet::UserMuteState { user_id, is_muted } => {
+                self.handle_user_mute_state(peer_addr, user_id, is_muted).await
+            }
             _ => {
                 error!("[{}] Unexpected packet type: {:?}", peer_addr, packet);
                 Ok(())
@@ -246,6 +250,7 @@ impl ManagementServer {
             id: user_id,
             username,
             in_voice: false,
+            is_muted: false,
             token: voice_token,
         };
 
@@ -263,6 +268,7 @@ impl ManagementServer {
                     user_id: u.id,
                     username: u.username.clone(),
                     in_voice: u.in_voice,
+                    is_muted: u.is_muted,
                 })
                 .collect::<Vec<_>>()
         };
@@ -283,6 +289,7 @@ impl ManagementServer {
                 user_id,
                 username: username_clone.clone(),
                 in_voice: false,
+                is_muted: false,
             },
         };
         let broadcast_msg = BroadcastMessage {
@@ -315,6 +322,7 @@ impl ManagementServer {
             if let Some(user) = users_lock.get_mut(&peer_addr) {
                 let user_id = user.id;
                 user.in_voice = true;
+                user.is_muted = false; // by default user is not muted
                 user_id
             } else {
                 return Err("User not found in users map".into());
@@ -353,6 +361,7 @@ impl ManagementServer {
             if let Some(user) = users_lock.get_mut(&peer_addr) {
                 let user_id = user.id;
                 user.in_voice = false;
+                user.is_muted = false;
                 user_id
             } else {
                 return Err("User not found in users map".into());
@@ -430,10 +439,10 @@ impl ManagementServer {
         message: String,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Get user info
-        let (user_id, username) = {
+        let user_id = {
             let users_lock = self.users.read().await;
             if let Some(user) = users_lock.get(&peer_addr) {
-                (user.id, user.username.clone())
+                user.id
             } else {
                 return Err("User not found in users map".into());
             }
@@ -452,7 +461,6 @@ impl ManagementServer {
         let message_event = Packet::UserSentMessage {
             user_id,
             timestamp,
-            username,
             message: message.clone(),
         };
         let broadcast_msg = BroadcastMessage {
@@ -467,6 +475,40 @@ impl ManagementServer {
             peer_addr,
             user_id,
             message.len()
+        );
+
+        Ok(())
+    }
+
+    /// Handle user mute state event: broadcast to all clients excluding sender
+    async fn handle_user_mute_state(
+        &self,
+        peer_addr: SocketAddr,
+        user_id: u64,
+        is_muted: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Update user's mute state
+        {
+            let mut users_lock = self.users.write().await;
+            if let Some(user) = users_lock.get_mut(&peer_addr) {
+                user.is_muted = is_muted;
+            } else {
+                return Err("User not found in users map".into());
+            }
+        }
+
+        // Broadcast user mute state event to all clients (excluding sender)
+        let mute_event = Packet::UserMuteState { user_id, is_muted };
+        let broadcast_msg = BroadcastMessage {
+            sender_addr: Some(peer_addr),
+            for_all: false,
+            packet_data: mute_event.encode(),
+        };
+        let _ = self.broadcast_tx.send(broadcast_msg);
+
+        debug!(
+            "[{}] User mute state changed: id={}, is_muted={}",
+            peer_addr, user_id, is_muted
         );
 
         Ok(())

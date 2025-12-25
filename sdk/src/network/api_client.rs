@@ -120,4 +120,13 @@ impl ApiClient {
 
         Ok(())
     }
+
+    /// Send mute state (event, no response expected)
+    pub async fn send_mute_state(&self, user_id: u64, is_muted: bool) -> Result<(), ClientError> {
+        let packet = Packet::UserMuteState { user_id, is_muted };
+
+        self.tcp_client.send_event(packet).await?;
+
+        Ok(())
+    }
 }

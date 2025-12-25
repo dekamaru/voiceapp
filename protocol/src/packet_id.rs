@@ -22,6 +22,7 @@ pub(crate) enum PacketId {
     UserLeftVoice = 0x43,
     UserLeftServer = 0x44,
     UserSentMessage = 0x45,
+    UserMuteState = 0x46,
 
     // UDP (0x61-...)
     VoiceData = 0x61,
@@ -53,6 +54,7 @@ impl TryFrom<u8> for PacketId {
             0x43 => Ok(PacketId::UserLeftVoice),
             0x44 => Ok(PacketId::UserLeftServer),
             0x45 => Ok(PacketId::UserSentMessage),
+            0x46 => Ok(PacketId::UserMuteState),
             0x61 => Ok(PacketId::VoiceData),
             _ => Err(ProtocolError::UnknownPacketId(value)),
         }

@@ -294,6 +294,8 @@ impl Application {
                     self.audio_manager.play_notification("unmute");
                 }
 
+                let _ = self.voice_client.send_mute_state(*muted);
+
                 Task::none()
             }
             _ => Task::none()

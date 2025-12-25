@@ -1,8 +1,5 @@
 use crate::application::{Message, Page, PageType, VoiceCommand, VoiceCommandResult};
-use crate::colors::{
-    color_alert, color_success, divider_bg, slider_bg, slider_thumb, text_chat_header,
-    text_primary, text_secondary, DARK_CONTAINER_BACKGROUND,
-};
+use crate::colors::{color_alert, color_error, color_success, divider_bg, slider_bg, slider_thumb, text_chat_header, text_primary, text_secondary, DARK_CONTAINER_BACKGROUND};
 use crate::icons::Icons;
 use crate::widgets::Widgets;
 use chrono::{DateTime, Local, Utc};
@@ -354,10 +351,14 @@ impl RoomPage {
     fn member(
         username: &str,
         in_voice: bool,
-        _muted: bool,
-    ) -> iced::widget::Container<'static, Message> {
+        muted: bool,
+    ) -> Container<'static, Message> {
         let icon = if in_voice {
-            Icons::microphone_fill(color_success(), 16)
+            if muted {
+                Icons::microphone_slash_fill(color_error(), 16)
+            } else {
+                Icons::microphone_fill(color_success(), 16)
+            }
         } else {
             Icons::chat_teardrop_dots_fill(text_secondary(), 16)
         };
@@ -412,7 +413,7 @@ impl RoomPage {
             members_column = members_column.push(Self::member(
                 &participant.username,
                 participant.in_voice,
-                false,
+                participant.is_muted,
             ));
         }
 
@@ -440,6 +441,10 @@ impl Page for RoomPage {
             Message::RoomPage(room_message) => match room_message {
                 RoomPageMessage::MuteToggle => {
                     self.muted = !self.muted;
+
+                    if let Some(user) = self.participants.get_mut(&self.user_id) {
+                        user.is_muted = self.muted;
+                    }
 
                     return Task::done(Message::MuteInput(self.muted));
                 }
@@ -474,6 +479,7 @@ impl Page for RoomPage {
                     if status.is_ok() {
                         if let Some(user) = self.participants.get_mut(&self.user_id) {
                             user.in_voice = true;
+                            user.is_muted = false;
                         }
                     } else {
                         warn!("Failed to join voice: {}", status.err().unwrap());
@@ -483,6 +489,7 @@ impl Page for RoomPage {
                     if status.is_ok() {
                         if let Some(user) = self.participants.get_mut(&self.user_id) {
                             user.in_voice = false;
+                            user.is_muted = false;
                         }
                     } else {
                         warn!("Failed to leave voice: {}", status.err().unwrap());
@@ -510,10 +517,11 @@ impl Page for RoomPage {
                     debug!("User {} joined server", username);
                     self.participants.insert(
                         user_id,
-                        voiceapp_sdk::ParticipantInfo {
+                        ParticipantInfo {
                             user_id,
                             username,
                             in_voice: false,
+                            is_muted: false,
                         },
                     );
                 }
@@ -521,12 +529,14 @@ impl Page for RoomPage {
                     debug!("User {} joined voice", user_id);
                     if let Some(user) = self.participants.get_mut(&user_id) {
                         user.in_voice = true;
+                        user.is_muted = false;
                     }
                 }
                 ClientEvent::UserLeftVoice { user_id } => {
                     debug!("User {} left voice", user_id);
                     if let Some(user) = self.participants.get_mut(&user_id) {
                         user.in_voice = false;
+                        user.is_muted = false;
                     }
                 }
                 ClientEvent::UserLeftServer { user_id } => {
@@ -547,6 +557,12 @@ impl Page for RoomPage {
                             Id::new("chat_area_scroll"),
                             scrollable::RelativeOffset::END,
                         );
+                    }
+                }
+
+                ClientEvent::UserMuteState { user_id, is_muted } => {
+                    if let Some(user) = self.participants.get_mut(&user_id) {
+                        user.is_muted = is_muted;
                     }
                 }
             },

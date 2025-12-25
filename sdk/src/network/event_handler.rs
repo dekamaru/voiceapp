@@ -27,6 +27,11 @@ pub enum ClientEvent {
         timestamp: u64,
         message: String,
     },
+    /// A user's mute state changed
+    UserMuteState {
+        user_id: u64,
+        is_muted: bool,
+    },
 }
 
 /// Client-side state for voice connection
@@ -129,8 +134,11 @@ impl EventHandler {
             Packet::UserLeftVoice { user_id } => {
                 Self::handle_user_left_voice(user_id, state, event_tx).await
             }
-            Packet::UserSentMessage { user_id, timestamp, username: _, message } => {
+            Packet::UserSentMessage { user_id, timestamp, message } => {
                 Self::handle_user_sent_message(user_id, timestamp, message, event_tx).await
+            }
+            Packet::UserMuteState { user_id, is_muted } => {
+                Self::handle_user_mute_state(user_id, is_muted, state, event_tx).await
             }
             _ => { Ok(()) }
         }
@@ -228,6 +236,7 @@ impl EventHandler {
         let mut s = state.write().await;
         if let Some(participant) = s.participants.get_mut(&user_id) {
             participant.in_voice = true;
+            participant.is_muted = false;
         }
         drop(s);
 
@@ -247,6 +256,7 @@ impl EventHandler {
         let mut s = state.write().await;
         if let Some(participant) = s.participants.get_mut(&user_id) {
             participant.in_voice = false;
+            participant.is_muted = false;
         }
         drop(s);
 
@@ -272,6 +282,26 @@ impl EventHandler {
             })
             .await;
 
+        Ok(())
+    }
+
+    async fn handle_user_mute_state(
+        user_id: u64,
+        is_muted: bool,
+        state: &Arc<RwLock<ClientState>>,
+        event_tx: &Sender<ClientEvent>,
+    ) -> Result<(), String> {
+        let mut s = state.write().await;
+        if let Some(participant) = s.participants.get_mut(&user_id) {
+            participant.is_muted = is_muted;
+        }
+        drop(s);
+
+        let _ = event_tx
+            .send(ClientEvent::UserMuteState { user_id, is_muted })
+            .await;
+
+        debug!("User mute state changed: id={}, is_muted={}", user_id, is_muted);
         Ok(())
     }
 }

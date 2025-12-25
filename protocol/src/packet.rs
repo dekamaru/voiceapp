@@ -8,6 +8,7 @@ pub struct ParticipantInfo {
     pub user_id: u64,
     pub username: String,
     pub in_voice: bool,
+    pub is_muted: bool,
 }
 
 /// Protocol packet types for client-server communication.
@@ -32,7 +33,8 @@ pub enum Packet {
     UserJoinedVoice { user_id: u64 },
     UserLeftVoice { user_id: u64 },
     UserLeftServer { user_id: u64 },
-    UserSentMessage { user_id: u64, timestamp: u64, username: String, message: String },
+    UserSentMessage { user_id: u64, timestamp: u64, message: String },
+    UserMuteState { user_id: u64, is_muted: bool },
 
     // UDP
     VoiceData { user_id: u64, sequence: u32, timestamp: u32, data: Vec<u8> },
@@ -82,6 +84,7 @@ impl Packet {
                     writer.write_u64(participant.user_id);
                     writer.write_string(&participant.username);
                     writer.write_bool(participant.in_voice);
+                    writer.write_bool(participant.is_muted);
                 }
             }
             Packet::VoiceAuthResponse { request_id, success } => {
@@ -104,16 +107,20 @@ impl Packet {
                 writer.write_u64(participant.user_id);
                 writer.write_string(&participant.username);
                 writer.write_bool(participant.in_voice);
+                writer.write_bool(participant.is_muted);
             }
             Packet::UserJoinedVoice { user_id }
             | Packet::UserLeftVoice { user_id }
             | Packet::UserLeftServer { user_id } => {
                 writer.write_u64(*user_id);
             }
-            Packet::UserSentMessage { user_id, timestamp, username, message } => {
+            Packet::UserMuteState { user_id, is_muted } => {
+                writer.write_u64(*user_id);
+                writer.write_bool(*is_muted);
+            }
+            Packet::UserSentMessage { user_id, timestamp, message } => {
                 writer.write_u64(*user_id);
                 writer.write_u64(*timestamp);
-                writer.write_string(username);
                 writer.write_string(message);
             }
             Packet::VoiceData { user_id, sequence, timestamp, data } => {
@@ -185,7 +192,8 @@ impl Packet {
                     let user_id = payload_reader.read_u64()?;
                     let username = payload_reader.read_string()?;
                     let in_voice = payload_reader.read_bool()?;
-                    participants.push(ParticipantInfo { user_id, username, in_voice });
+                    let is_muted = payload_reader.read_bool()?;
+                    participants.push(ParticipantInfo { user_id, username, in_voice, is_muted });
                 }
                 Packet::LoginResponse { request_id, id, voice_token, participants }
             }
@@ -213,7 +221,8 @@ impl Packet {
                 let user_id = payload_reader.read_u64()?;
                 let username = payload_reader.read_string()?;
                 let in_voice = payload_reader.read_bool()?;
-                let participant = ParticipantInfo { user_id, username, in_voice };
+                let is_muted = payload_reader.read_bool()?;
+                let participant = ParticipantInfo { user_id, username, in_voice, is_muted };
                 Packet::UserJoinedServer { participant }
             }
             PacketId::UserJoinedVoice => {
@@ -231,9 +240,13 @@ impl Packet {
             PacketId::UserSentMessage => {
                 let user_id = payload_reader.read_u64()?;
                 let timestamp = payload_reader.read_u64()?;
-                let username = payload_reader.read_string()?;
                 let message = payload_reader.read_string()?;
-                Packet::UserSentMessage { user_id, timestamp, username, message }
+                Packet::UserSentMessage { user_id, timestamp, message }
+            }
+            PacketId::UserMuteState => {
+                let user_id = payload_reader.read_u64()?;
+                let is_muted = payload_reader.read_bool()?;
+                Packet::UserMuteState { user_id, is_muted }
             }
             PacketId::VoiceData => {
                 let user_id = payload_reader.read_u64()?;
@@ -264,6 +277,7 @@ impl Packet {
             Packet::UserLeftVoice { .. } => PacketId::UserLeftVoice,
             Packet::UserLeftServer { .. } => PacketId::UserLeftServer,
             Packet::UserSentMessage { .. } => PacketId::UserSentMessage,
+            Packet::UserMuteState { .. } => PacketId::UserMuteState,
             Packet::VoiceData { .. } => PacketId::VoiceData,
         }.as_u8()
     }
@@ -288,6 +302,7 @@ impl Packet {
             Packet::UserLeftVoice { .. } => None,
             Packet::UserLeftServer { .. } => None,
             Packet::UserSentMessage { .. } => None,
+            Packet::UserMuteState { .. } => None,
             Packet::VoiceData { .. } => None,
         }
     }
@@ -342,11 +357,13 @@ mod tests {
                     user_id: 1,
                     username: "alice".to_string(),
                     in_voice: true,
+                    is_muted: false,
                 },
                 ParticipantInfo {
                     user_id: 2,
                     username: "bob".to_string(),
                     in_voice: false,
+                    is_muted: true,
                 },
             ],
         });
@@ -357,7 +374,6 @@ mod tests {
         roundtrip(Packet::UserSentMessage {
             user_id: 111,
             timestamp: 0xDEADBEEF,
-            username: "dave".to_string(),
             message: "Test message".to_string(),
         });
     }
@@ -385,7 +401,6 @@ mod tests {
         roundtrip(Packet::UserSentMessage {
             user_id: 1,
             timestamp: 0xDEADBEEF,
-            username: "François".to_string(),
             message: "用户🎉 Привет мир! 🌍".to_string(),
         });
     }

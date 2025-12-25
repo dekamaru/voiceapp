@@ -113,6 +113,19 @@ impl Client {
         self.api_client.send_message(message).await
     }
 
+    pub async fn send_mute_state(&self, is_muted: bool) -> Result<(), ClientError> {
+        let state = self.event_handler.state();
+        let lock = state.read().await;
+        let maybe_user_id = lock.user_id;
+        drop(lock);
+
+        if let Some(user_id) = maybe_user_id {
+            let _ = self.api_client.send_mute_state(user_id, is_muted).await;
+        }
+
+        Ok(())
+    }
+
     /// Get list of user IDs currently in voice channel (blocking version)
     pub fn get_users_in_voice(&self) -> Vec<u64> {
         let state_arc = self.event_handler.state();

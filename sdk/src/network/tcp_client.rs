@@ -56,6 +56,23 @@ impl TcpClient {
         Ok(())
     }
 
+    /// Send packet without waiting for response (for events)
+    pub async fn send_event(
+        &self,
+        packet: Packet,
+    ) -> Result<(), ClientError> {
+        // Encode packet
+        let encoded = packet.encode();
+
+        // Send packet without callback (no response expected)
+        self.send_tx
+            .send((encoded, None))
+            .await
+            .map_err(|_| ClientError::Disconnected)?;
+
+        Ok(())
+    }
+
     /// Send request packet and wait for response
     pub async fn send_request(
         &self,
