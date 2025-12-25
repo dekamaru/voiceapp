@@ -1,6 +1,7 @@
 use async_channel::{Receiver, Sender};
 use rubato::{FftFixedIn, Resampler};
 use tracing::{error, info, warn};
+use voiceapp_protocol::Packet;
 use crate::voice_encoder::{VoiceEncoder, OPUS_FRAME_SAMPLES};
 
 /// Configuration for VoiceInputPipeline
@@ -130,9 +131,15 @@ impl VoiceInputPipeline {
 
                         match codec.encode(&frame) {
                             Ok(Some(voice_data)) => {
-                                // Encode VoiceData to bytes and send to UDP
-                                let encoded_packet = voiceapp_protocol::encode_voice_data(&voice_data);
-                                if udp_send_tx.send(encoded_packet).await.is_err() {
+                                // Encode VoiceData to Packet and send to UDP
+                                let packet = Packet::VoiceData {
+                                    user_id: voice_data.ssrc,
+                                    sequence: voice_data.sequence,
+                                    timestamp: voice_data.timestamp,
+                                    data: voice_data.opus_frame,
+                                };
+
+                                if udp_send_tx.send(packet.encode()).await.is_err() {
                                     error!("UDP send channel closed, stopping pipeline");
                                     return;
                                 }
@@ -153,8 +160,13 @@ impl VoiceInputPipeline {
                     if !encode_buffer.is_empty() {
                         match codec.encode(&encode_buffer) {
                             Ok(Some(voice_data)) => {
-                                let encoded_packet = voiceapp_protocol::encode_voice_data(&voice_data);
-                                let _ = udp_send_tx.send(encoded_packet).await;
+                                let packet = Packet::VoiceData {
+                                    user_id: voice_data.ssrc,
+                                    sequence: voice_data.sequence,
+                                    timestamp: voice_data.timestamp,
+                                    data: voice_data.opus_frame,
+                                };
+                                let _ = udp_send_tx.send(packet.encode()).await;
                             }
                             Ok(None) => {
                                 // No final frame to send

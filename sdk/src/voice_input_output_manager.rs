@@ -2,8 +2,9 @@ use std::sync::Arc;
 use async_channel::{unbounded, Receiver, Sender};
 use dashmap::DashMap;
 use tracing::{error, info};
-use voiceapp_protocol::PacketId;
+use voiceapp_protocol::Packet;
 use crate::voice_input_pipeline::{VoiceInputPipeline, VoiceInputPipelineConfig};
+use crate::voice_decoder::VoiceData;
 use crate::VoiceDecoder;
 
 /// Manages voice input and output with dynamic sample rate configuration
@@ -16,7 +17,7 @@ pub struct VoiceInputOutputManager {
 }
 
 impl VoiceInputOutputManager {
-    pub fn new(send_tx: Sender<Vec<u8>>, receive_tx: Receiver<(PacketId, Vec<u8>)>) -> Self {
+    pub fn new(send_tx: Sender<Vec<u8>>, receive_tx: Receiver<Packet>) -> Self {
         let output_decoders = Arc::new(DashMap::new());
 
         // Spawn async task to process incoming voice packets
@@ -100,37 +101,31 @@ impl VoiceInputOutputManager {
     /// Background task that processes incoming voice packets
     /// Runs until receive_tx is closed
     async fn process_incoming_packets(
-        receive_rx: Receiver<(PacketId, Vec<u8>)>,
+        receive_rx: Receiver<Packet>,
         output_decoders: Arc<DashMap<u64, (u32, Arc<VoiceDecoder>)>>,
     ) {
         info!("Voice packet processor started");
 
         loop {
             match receive_rx.recv().await {
-                Ok((packet_id, data)) => {
+                Ok(packet) => {
                     // Only process VoiceData packets
-                    if packet_id != PacketId::VoiceData {
-                        continue;
-                    }
+                    if let Packet::VoiceData { user_id, sequence, timestamp, data } = packet {
+                        // Create VoiceData struct for decoder
+                        let voice_data = VoiceData {
+                            sequence,
+                            timestamp,
+                            ssrc: user_id,
+                            opus_frame: data,
+                        };
 
-                    // Decode voice data packet
-                    let voice_data = match voiceapp_protocol::decode_voice_data(&data) {
-                        Ok(vd) => vd,
-                        Err(e) => {
-                            error!("Failed to decode voice data packet: {}", e);
-                            continue;
-                        }
-                    };
-
-                    // Extract user_id from ssrc field
-                    let user_id = voice_data.ssrc;
-
-                    // Look up decoder for this user
-                    if let Some(entry) = output_decoders.get(&user_id) {
-                        let (_, decoder) = entry.value();
-                        // Insert packet into the decoder's NetEQ buffer
-                        if let Err(e) = decoder.insert_packet(voice_data) {
-                            error!("Failed to insert packet for user {}: {}", user_id, e);
+                        // Look up decoder for this user
+                        if let Some(entry) = output_decoders.get(&user_id) {
+                            let (_, decoder) = entry.value();
+                            // Insert packet into the decoder's NetEQ buffer
+                            if let Err(e) = decoder.insert_packet(voice_data) {
+                                error!("Failed to insert packet for user {}: {}", user_id, e);
+                            }
                         }
                     }
                 }

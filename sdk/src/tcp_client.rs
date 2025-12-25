@@ -5,21 +5,21 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tracing::{debug, error};
-use voiceapp_protocol::PacketId;
+use voiceapp_protocol::Packet;
 
 use crate::voice_client::VoiceClientError;
 
 /// Default timeout for request/response operations
 const REQUEST_TIMEOUT_SECS: u64 = 5;
 
-type RequestCallback = (PacketId, oneshot::Sender<Vec<u8>>);
+type RequestCallback = (u64, oneshot::Sender<Packet>);
 
 /// TCP client for managing request/response communication
 pub struct TcpClient {
     send_tx: Sender<(Vec<u8>, Option<RequestCallback>)>,
     send_rx: Receiver<(Vec<u8>, Option<RequestCallback>)>,
-    packet_tx: Sender<(PacketId, Vec<u8>)>,
-    packet_rx: Receiver<(PacketId, Vec<u8>)>,
+    packet_tx: Sender<Packet>,
+    packet_rx: Receiver<Packet>,
 }
 
 impl TcpClient {
@@ -37,7 +37,7 @@ impl TcpClient {
     }
 
     /// Get a receiver for incoming events
-    pub fn packet_stream(&self) -> Receiver<(PacketId, Vec<u8>)> {
+    pub fn packet_stream(&self) -> Receiver<Packet> {
         self.packet_rx.clone()
     }
 
@@ -58,48 +58,33 @@ impl TcpClient {
     pub async fn send_request(
         &self,
         request: Vec<u8>,
-        expected_response_id: PacketId,
-    ) -> Result<(), VoiceClientError> {
+        request_id: u64,
+    ) -> Result<Packet, VoiceClientError> {
         let (response_tx, response_rx) = oneshot::channel();
 
         // Send request with callback registered for expected response
         self.send_tx
-            .send((request, Some((expected_response_id, response_tx))))
+            .send((request, Some((request_id, response_tx))))
             .await
             .map_err(|_| VoiceClientError::Disconnected)?;
 
         // Wait for response with timeout
-        self.wait_for_response(response_rx, expected_response_id)
-            .await?;
-
-        Ok(())
+        self.wait_for_response(response_rx, request_id)
+            .await
     }
 
     /// Send request and wait for decoded response
     pub async fn send_request_with_response<T, F>(
         &self,
         request: Vec<u8>,
-        expected_response_id: PacketId,
+        request_id: u64,
         decoder: F,
     ) -> Result<T, VoiceClientError>
     where
-        F: Fn(&[u8]) -> Result<T, voiceapp_protocol::ProtocolError>,
+        F: Fn(Packet) -> Result<T, String>,
     {
-        let (response_tx, response_rx) = oneshot::channel();
-
-        // Send request with callback registered for expected response
-        self.send_tx
-            .send((request, Some((expected_response_id, response_tx))))
-            .await
-            .map_err(|_| VoiceClientError::Disconnected)?;
-
-        // Wait for response with timeout
-        let payload = self
-            .wait_for_response(response_rx, expected_response_id)
-            .await?;
-
-        // Decode payload
-        decoder(&payload).map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()))
+        let packet = self.send_request(request, request_id).await?;
+        decoder(packet).map_err(|e| VoiceClientError::ConnectionFailed(e))
     }
 
     /// Spawn TCP handler task
@@ -109,7 +94,7 @@ impl TcpClient {
 
         tokio::spawn(async move {
             let mut read_buf = [0u8; 4096];
-            let mut pending_responses: HashMap<PacketId, oneshot::Sender<Vec<u8>>> =
+            let mut pending_responses: HashMap<u64, oneshot::Sender<Packet>> =
                 HashMap::new();
             // Buffer to accumulate partial packets across reads
             let mut accumulator: Vec<u8> = Vec::new();
@@ -159,13 +144,13 @@ impl TcpClient {
     async fn handle_outgoing(
         socket: &mut TcpStream,
         recv_result: Result<(Vec<u8>, Option<RequestCallback>), async_channel::RecvError>,
-        pending_responses: &mut HashMap<PacketId, oneshot::Sender<Vec<u8>>>,
+        pending_responses: &mut HashMap<u64, oneshot::Sender<Packet>>,
     ) -> Result<(), String> {
         match recv_result {
             Ok((packet, response_callback)) => {
                 // Register callback if provided
-                if let Some((expected_packet_id, tx)) = response_callback {
-                    pending_responses.insert(expected_packet_id, tx);
+                if let Some((expected_request_id, tx)) = response_callback {
+                    pending_responses.insert(expected_request_id, tx);
                 }
 
                 // Send packet to socket
@@ -184,8 +169,8 @@ impl TcpClient {
     async fn handle_incoming(
         read_result: std::io::Result<usize>,
         read_buf: &[u8],
-        pending_responses: &mut HashMap<PacketId, oneshot::Sender<Vec<u8>>>,
-        packet_tx: &Sender<(PacketId, Vec<u8>)>,
+        pending_responses: &mut HashMap<u64, oneshot::Sender<Packet>>,
+        packet_tx: &Sender<Packet>,
         accumulator: &mut Vec<u8>,
     ) -> Result<bool, String> {
         match read_result {
@@ -196,37 +181,42 @@ impl TcpClient {
 
                 // Parse all complete packets from the accumulator
                 loop {
-                    if accumulator.len() < 3 {
-                        // Not enough data for packet header, wait for more data
-                        break;
-                    }
+                    match Packet::decode(accumulator) {
+                        Ok((packet, size)) => {
+                            let packet_id = packet.id();
 
-                    // Check if we have a complete packet
-                    let payload_len = u16::from_be_bytes([accumulator[1], accumulator[2]]) as usize;
-                    let total_packet_size = 3 + payload_len;
+                            debug!("Received TCP packet: ID 0x{:02x}", packet_id);
 
-                    if accumulator.len() < total_packet_size {
-                        // Incomplete packet, wait for more data
-                        break;
-                    }
+                            // Extract request_id from response packets and check if this is a pending response
+                            let request_id = match &packet {
+                                Packet::LoginResponse { request_id, .. } => Some(*request_id),
+                                Packet::VoiceAuthResponse { request_id, .. } => Some(*request_id),
+                                Packet::JoinVoiceChannelResponse { request_id, .. } => Some(*request_id),
+                                Packet::LeaveVoiceChannelResponse { request_id, .. } => Some(*request_id),
+                                Packet::ChatMessageResponse { request_id, .. } => Some(*request_id),
+                                _ => None,
+                            };
 
-                    // We have a complete packet, parse it
-                    match voiceapp_protocol::parse_packet(&accumulator[..total_packet_size]) {
-                        Ok((packet_id, payload)) => {
-                            debug!("Received TCP packet: {:?}", packet_id);
-
-                            // Check if this is a pending response
-                            if let Some(tx) = pending_responses.remove(&packet_id) {
-                                let _ = tx.send(payload.to_vec());
+                            if let Some(req_id) = request_id {
+                                if let Some(tx) = pending_responses.remove(&req_id) {
+                                    let _ = tx.send(packet.clone());
+                                }
                             }
 
-                            let _ = packet_tx.send((packet_id, payload.to_vec())).await;
+                            let _ = packet_tx.send(packet).await;
 
                             // Remove the processed packet from the accumulator
-                            accumulator.drain(..total_packet_size);
+                            accumulator.drain(..size);
+                        }
+                        Err(voiceapp_protocol::ProtocolError::IncompletePayload { .. }) |
+                        Err(voiceapp_protocol::ProtocolError::PacketTooShort { .. }) => {
+                            // Wait for more data
+                            break;
                         }
                         Err(e) => {
-                            return Err(format!("Parse error: {}", e));
+                            error!("Parse error: {}, clearing buffer", e);
+                            accumulator.clear();
+                            break;
                         }
                     }
                 }
@@ -240,17 +230,17 @@ impl TcpClient {
     /// Wait for response with timeout
     async fn wait_for_response(
         &self,
-        response_rx: oneshot::Receiver<Vec<u8>>,
-        expected_id: PacketId,
-    ) -> Result<Vec<u8>, VoiceClientError> {
+        response_rx: oneshot::Receiver<Packet>,
+        request_id: u64,
+    ) -> Result<Packet, VoiceClientError> {
         let timeout = tokio::time::timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), response_rx);
 
         match timeout.await {
-            Ok(Ok(payload)) => Ok(payload),
+            Ok(Ok(packet)) => Ok(packet),
             Ok(Err(_)) => Err(VoiceClientError::Disconnected),
             Err(_) => Err(VoiceClientError::Timeout(format!(
-                "packet {}",
-                expected_id.as_u8()
+                "request_id {}",
+                request_id
             ))),
         }
     }

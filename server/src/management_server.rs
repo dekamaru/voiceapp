@@ -2,17 +2,11 @@ use rand::random;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::SystemTime;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, error, info};
-use voiceapp_protocol::{
-    decode_chat_message_request, decode_login_request, encode_chat_message_response,
-    encode_join_voice_channel_response, encode_leave_voice_channel_response, encode_login_response,
-    encode_user_joined_server, encode_user_joined_voice, encode_user_left_server,
-    encode_user_left_voice, encode_user_sent_message, parse_packet, PacketId, ParticipantInfo,
-};
+use voiceapp_protocol::{Packet, ParticipantInfo, ProtocolError};
 
 /// Broadcast message sent to all connected clients
 #[derive(Clone, Debug)]
@@ -104,6 +98,7 @@ impl ManagementServer {
         peer_addr: SocketAddr,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut read_buf = vec![0u8; 4096];
+        let mut packet_buffer = Vec::new(); // Accumulates partial packets
         let mut broadcast_rx = self.broadcast_tx.subscribe();
 
         loop {
@@ -118,8 +113,31 @@ impl ManagementServer {
                                 return Ok(());
                             }
 
-                            if let Err(e) = self.handle_incoming_request(&mut socket, peer_addr, &read_buf).await {
-                                error!("[{}] Error handling incoming request: {}", peer_addr, e);
+                            // Append new data to packet buffer
+                            packet_buffer.extend_from_slice(&read_buf[..n]);
+
+                            // Process all complete packets in the buffer
+                            loop {
+                                match Packet::decode(&packet_buffer) {
+                                    Ok((packet, size)) => {
+                                        // Handle the packet
+                                        if let Err(e) = self.handle_packet(&mut socket, peer_addr, packet).await {
+                                            error!("[{}] Error handling packet: {}", peer_addr, e);
+                                        }
+
+                                        // Remove consumed bytes from buffer
+                                        packet_buffer.drain(..size);
+                                    }
+                                    Err(ProtocolError::IncompletePayload { .. }) | Err(ProtocolError::PacketTooShort { .. }) => {
+                                        // Not enough data yet, wait for more
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        error!("[{}] Protocol error: {}, clearing buffer", peer_addr, e);
+                                        packet_buffer.clear();
+                                        break;
+                                    }
+                                }
                             }
                         }
                         Err(e) => {
@@ -152,70 +170,31 @@ impl ManagementServer {
         }
     }
 
-    /// Handle incoming request packet from client
-    async fn handle_incoming_request(
+    /// Handle a decoded packet from client
+    async fn handle_packet(
         &self,
         socket: &mut TcpStream,
         peer_addr: SocketAddr,
-        read_buf: &[u8],
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        // Try to parse the packet
-        match parse_packet(read_buf) {
-            Ok((packet_id, payload)) => {
-                // Dispatch to appropriate handler based on packet type
-                match packet_id {
-                    PacketId::LoginRequest => {
-                        if let Err(e) = self.handle_login_request(socket, peer_addr, &payload).await
-                        {
-                            error!("[{}] Failed to handle login request: {}", peer_addr, e);
-                        }
-                    }
-                    PacketId::JoinVoiceChannelRequest => {
-                        if let Err(e) = self
-                            .handle_join_voice_channel_request(socket, peer_addr)
-                            .await
-                        {
-                            error!(
-                                "[{}] Failed to handle join voice channel request: {}",
-                                peer_addr, e
-                            );
-                        }
-                    }
-                    PacketId::LeaveVoiceChannelRequest => {
-                        if let Err(e) = self
-                            .handle_leave_voice_channel_request(socket, peer_addr)
-                            .await
-                        {
-                            error!(
-                                "[{}] Failed to handle leave voice channel request: {}",
-                                peer_addr, e
-                            );
-                        }
-                    }
-                    PacketId::ChatMessageRequest => {
-                        if let Err(e) = self
-                            .handle_chat_message_request(socket, peer_addr, &payload)
-                            .await
-                        {
-                            error!(
-                                "[{}] Failed to handle chat message request: {}",
-                                peer_addr, e
-                            );
-                        }
-                    }
-                    _ => {
-                        error!("[Management] Unknown packet id {:?}", packet_id);
-                    }
-                }
+        packet: Packet,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        match packet {
+            Packet::LoginRequest { request_id, username } => {
+                self.handle_login_request(socket, peer_addr, request_id, username).await
             }
-            Err(e) => {
-                error!(
-                    "[Management] Failed to parse packet from {}: {}",
-                    peer_addr, e
-                );
+            Packet::JoinVoiceChannelRequest { request_id } => {
+                self.handle_join_voice_channel_request(socket, peer_addr, request_id).await
+            }
+            Packet::LeaveVoiceChannelRequest { request_id } => {
+                self.handle_leave_voice_channel_request(socket, peer_addr, request_id).await
+            }
+            Packet::ChatMessageRequest { request_id, message } => {
+                self.handle_chat_message_request(socket, peer_addr, request_id, message).await
+            }
+            _ => {
+                error!("[{}] Unexpected packet type: {:?}", peer_addr, packet);
+                Ok(())
             }
         }
-        Ok(true) // Continue processing
     }
 
     /// Handle broadcast message: filter and send to client if appropriate
@@ -242,15 +221,14 @@ impl ManagementServer {
         Ok(())
     }
 
-    /// Handle login request: decode username, create user, store in users map, send response
+    /// Handle login request: create user, store in users map, send response
     async fn handle_login_request(
         &self,
         socket: &mut TcpStream,
         peer_addr: SocketAddr,
-        payload: &[u8],
+        request_id: u64,
+        username: String,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Decode the login request to get username
-        let username = decode_login_request(payload)?;
 
         // Generate new user ID
         let user_id = {
@@ -290,16 +268,27 @@ impl ManagementServer {
         };
 
         // Send login response with participant list
-        let response_packet = encode_login_response(user_id, voice_token, &participants);
-        socket.write_all(&response_packet).await?;
+        let response = Packet::LoginResponse {
+            request_id,
+            id: user_id,
+            voice_token,
+            participants,
+        };
+        socket.write_all(&response.encode()).await?;
         socket.flush().await?;
 
         // Broadcast user joined server event to all other clients
-        let joined_packet = encode_user_joined_server(user_id, &username_clone);
+        let joined_event = Packet::UserJoinedServer {
+            participant: ParticipantInfo {
+                user_id,
+                username: username_clone.clone(),
+                in_voice: false,
+            },
+        };
         let broadcast_msg = BroadcastMessage {
             sender_addr: Some(peer_addr),
-            for_all: false, // Exclude the sender (new user) from this broadcast
-            packet_data: joined_packet,
+            for_all: false,
+            packet_data: joined_event.encode(),
         };
 
         // Ignore broadcast send errors (they might happen if no subscribers)
@@ -318,6 +307,7 @@ impl ManagementServer {
         &self,
         socket: &mut TcpStream,
         peer_addr: SocketAddr,
+        request_id: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Get user ID and update in_voice state
         let user_id = {
@@ -332,16 +322,16 @@ impl ManagementServer {
         };
 
         // Send response to caller
-        let response_packet = encode_join_voice_channel_response(true);
-        socket.write_all(&response_packet).await?;
+        let response = Packet::JoinVoiceChannelResponse { request_id, success: true };
+        socket.write_all(&response.encode()).await?;
         socket.flush().await?;
 
         // Broadcast user joined voice event to all other clients (exclude caller)
-        let joined_voice_packet = encode_user_joined_voice(user_id);
+        let joined_event = Packet::UserJoinedVoice { user_id };
         let broadcast_msg = BroadcastMessage {
-            sender_addr: Some(peer_addr), // Set sender to enable exclusion
-            for_all: false,               // Exclude the sender
-            packet_data: joined_voice_packet,
+            sender_addr: Some(peer_addr),
+            for_all: false,
+            packet_data: joined_event.encode(),
         };
         let _ = self.broadcast_tx.send(broadcast_msg);
 
@@ -355,6 +345,7 @@ impl ManagementServer {
         &self,
         socket: &mut TcpStream,
         peer_addr: SocketAddr,
+        request_id: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Get user ID and update in_voice state
         let user_id = {
@@ -369,16 +360,16 @@ impl ManagementServer {
         };
 
         // Send response to caller
-        let response_packet = encode_leave_voice_channel_response(true);
-        socket.write_all(&response_packet).await?;
+        let response = Packet::LeaveVoiceChannelResponse { request_id, success: true };
+        socket.write_all(&response.encode()).await?;
         socket.flush().await?;
 
         // Broadcast user left voice event to all other clients (exclude caller)
-        let left_voice_packet = encode_user_left_voice(user_id);
+        let left_event = Packet::UserLeftVoice { user_id };
         let broadcast_msg = BroadcastMessage {
-            sender_addr: Some(peer_addr), // Set sender to enable exclusion
-            for_all: false,               // Exclude the sender
-            packet_data: left_voice_packet,
+            sender_addr: Some(peer_addr),
+            for_all: false,
+            packet_data: left_event.encode(),
         };
 
         let _ = self.broadcast_tx.send(broadcast_msg);
@@ -399,24 +390,22 @@ impl ManagementServer {
         // If user was found, broadcast the disconnection and log
         if let Some(user) = user_option {
             // Broadcast user left server event to all clients
-            let left_packet = encode_user_left_server(user.id);
+            let left_event = Packet::UserLeftServer { user_id: user.id };
             let broadcast_msg = BroadcastMessage {
-                sender_addr: None, // Server-initiated broadcast
-                for_all: true,     // Send to all clients
-                packet_data: left_packet,
+                sender_addr: None,
+                for_all: true,
+                packet_data: left_event.encode(),
             };
-            // Ignore broadcast send errors
             let _ = self.broadcast_tx.send(broadcast_msg);
 
             // If user was in voice channel, broadcast user left voice event
             if user.in_voice {
-                let left_voice_packet = encode_user_left_voice(user.id);
+                let left_voice_event = Packet::UserLeftVoice { user_id: user.id };
                 let broadcast_msg = BroadcastMessage {
                     sender_addr: None,
                     for_all: true,
-                    packet_data: left_voice_packet,
+                    packet_data: left_voice_event.encode(),
                 };
-                // Ignore broadcast send errors
                 let _ = self.broadcast_tx.send(broadcast_msg);
             }
 
@@ -432,42 +421,44 @@ impl ManagementServer {
         }
     }
 
-    /// Handle chat message request: send response to caller and broadcast event with current UTC timestamp to all clients
+    /// Handle chat message request: send response to caller and broadcast event to all clients
     async fn handle_chat_message_request(
         &self,
         socket: &mut TcpStream,
         peer_addr: SocketAddr,
-        payload: &[u8],
+        request_id: u64,
+        message: String,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Decode the chat message
-        let message = decode_chat_message_request(payload)?;
-
-        // Get user ID
-        let user_id = {
+        // Get user info
+        let (user_id, username) = {
             let users_lock = self.users.read().await;
             if let Some(user) = users_lock.get(&peer_addr) {
-                user.id
+                (user.id, user.username.clone())
             } else {
                 return Err("User not found in users map".into());
             }
         };
 
         // Send response to caller with success status
-        let response_packet = encode_chat_message_response(true);
-        socket.write_all(&response_packet).await?;
+        let response = Packet::ChatMessageResponse { request_id, success: true };
+        socket.write_all(&response.encode()).await?;
         socket.flush().await?;
 
-        // Get current UTC timestamp in milliseconds since epoch
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)?
-            .as_millis() as u64;
-
         // Broadcast user sent message event to all clients (including sender)
-        let message_packet = encode_user_sent_message(user_id, timestamp, &message);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let message_event = Packet::UserSentMessage {
+            user_id,
+            timestamp,
+            username,
+            message: message.clone(),
+        };
         let broadcast_msg = BroadcastMessage {
-            sender_addr: None, // Server-initiated broadcast
-            for_all: true,     // Send to all clients
-            packet_data: message_packet,
+            sender_addr: None,
+            for_all: true,
+            packet_data: message_event.encode(),
         };
         let _ = self.broadcast_tx.send(broadcast_msg);
 

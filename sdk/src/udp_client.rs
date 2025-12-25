@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
 use tracing::{debug, error};
-use voiceapp_protocol::PacketId;
+use voiceapp_protocol::Packet;
 
 use crate::error::VoiceClientError;
 
@@ -19,9 +19,9 @@ const MAX_RETRY_ATTEMPTS: u32 = 3;
 pub struct UdpClient {
     send_tx: Sender<Vec<u8>>,
     send_rx: Receiver<Vec<u8>>,
-    packet_tx: Sender<(PacketId, Vec<u8>)>,
-    packet_rx: Receiver<(PacketId, Vec<u8>)>,
-    pending_requests: Arc<DashMap<PacketId, oneshot::Sender<Vec<u8>>>>,
+    packet_tx: Sender<Packet>,
+    packet_rx: Receiver<Packet>,
+    pending_requests: Arc<DashMap<u64, oneshot::Sender<Packet>>>,
 }
 
 impl UdpClient {
@@ -45,7 +45,7 @@ impl UdpClient {
     }
 
     /// Get receiver for incoming packets
-    pub fn packet_receiver(&self) -> Receiver<(PacketId, Vec<u8>)> {
+    pub fn packet_receiver(&self) -> Receiver<Packet> {
         self.packet_rx.clone()
     }
 
@@ -72,11 +72,11 @@ impl UdpClient {
     pub async fn send_request_with_response<T, F>(
         &self,
         request: Vec<u8>,
-        expected_response_id: PacketId,
+        request_id: u64,
         decoder: F,
     ) -> Result<T, VoiceClientError>
     where
-        F: Fn(&[u8]) -> Result<T, voiceapp_protocol::ProtocolError>,
+        F: Fn(Packet) -> Result<T, String>,
     {
         for attempt in 1..=MAX_RETRY_ATTEMPTS {
             debug!(
@@ -88,7 +88,7 @@ impl UdpClient {
             let (response_tx, response_rx) = oneshot::channel();
 
             // Register the oneshot sender in pending requests map
-            self.pending_requests.insert(expected_response_id, response_tx);
+            self.pending_requests.insert(request_id, response_tx);
 
             // Send request
             self.send_tx
@@ -104,22 +104,22 @@ impl UdpClient {
             .await;
 
             match timeout_result {
-                Ok(Ok(payload)) => {
+                Ok(Ok(packet)) => {
                     debug!("[UDP] Request with response successful");
                     // Clean up pending request
-                    self.pending_requests.remove(&expected_response_id);
-                    return decoder(&payload)
-                        .map_err(|e| VoiceClientError::ConnectionFailed(e.to_string()));
+                    self.pending_requests.remove(&request_id);
+                    return decoder(packet)
+                        .map_err(|e| VoiceClientError::ConnectionFailed(e));
                 }
                 Ok(Err(_)) => {
                     // Oneshot channel closed (handler stopped)
-                    self.pending_requests.remove(&expected_response_id);
+                    self.pending_requests.remove(&request_id);
                     return Err(VoiceClientError::Disconnected);
                 }
                 Err(_) => {
                     debug!("[UDP] Request timeout on attempt {}", attempt);
                     // Clean up pending request on timeout
-                    self.pending_requests.remove(&expected_response_id);
+                    self.pending_requests.remove(&request_id);
                     if attempt < MAX_RETRY_ATTEMPTS {
                         tokio::time::sleep(Duration::from_millis(100)).await;
                     }
@@ -199,8 +199,8 @@ impl UdpClient {
     async fn handle_incoming(
         read_result: std::io::Result<usize>,
         read_buf: &[u8],
-        packet_tx: &Sender<(PacketId, Vec<u8>)>,
-        pending_requests: &Arc<DashMap<PacketId, oneshot::Sender<Vec<u8>>>>,
+        packet_tx: &Sender<Packet>,
+        pending_requests: &Arc<DashMap<u64, oneshot::Sender<Packet>>>,
     ) -> Result<bool, String> {
         match read_result {
             Ok(0) => {
@@ -209,17 +209,26 @@ impl UdpClient {
             }
             Ok(n) => {
                 // Parse incoming packet
-                let (packet_id, payload) = voiceapp_protocol::parse_packet(&read_buf[..n])
+                let (packet, _size) = Packet::decode(&read_buf[..n])
                     .map_err(|e| format!("Parse error: {}", e))?;
 
+                // Extract request_id from response packets
+                let request_id = match &packet {
+                    Packet::VoiceAuthResponse { request_id, .. } => Some(*request_id),
+                    _ => None,
+                };
+
                 // Check if this packet is a response to a pending request
-                if let Some((_, response_tx)) = pending_requests.remove(&packet_id) {
-                    // Send to the oneshot channel for the specific request
-                    let _ = response_tx.send(payload.to_vec());
-                } else {
-                    // Not a pending request response, broadcast to general packet channel
-                    let _ = packet_tx.send((packet_id, payload.to_vec())).await;
+                if let Some(req_id) = request_id {
+                    if let Some((_, response_tx)) = pending_requests.remove(&req_id) {
+                        // Send to the oneshot channel for the specific request
+                        let _ = response_tx.send(packet);
+                        return Ok(true);
+                    }
                 }
+
+                // Not a pending request response, broadcast to general packet channel
+                let _ = packet_tx.send(packet).await;
 
                 Ok(true)
             }

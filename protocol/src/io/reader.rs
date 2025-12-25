@@ -79,4 +79,8 @@ impl<'a> Reader<'a> {
     pub fn remaining(&self) -> &[u8] {
         &self.data[self.pos..]
     }
+
+    pub fn position(&self) -> usize {
+        self.pos
+    }
 }

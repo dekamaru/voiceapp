@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
-use voiceapp_protocol::{PacketId, ParticipantInfo};
+use voiceapp_protocol::{Packet, ParticipantInfo};
 
 /// Events emitted by VoiceClient when state changes occur
 #[derive(Debug, Clone)]
@@ -73,17 +73,16 @@ impl EventHandler {
     }
 
     /// Listen to incoming packets and process events
-    pub fn listen_to_packets(&self, packet_rx: Receiver<(PacketId, Vec<u8>)>) {
+    pub fn listen_to_packets(&self, packet_rx: Receiver<Packet>) {
         let state = Arc::clone(&self.state);
         let event_tx = self.event_tx.clone();
 
         tokio::spawn(async move {
             loop {
                 match packet_rx.recv().await {
-                    Ok((packet_id, payload)) => {
+                    Ok(packet) => {
                         let result = Self::handle_packet(
-                            packet_id,
-                            &payload,
+                            packet,
                             &state,
                             &event_tx,
                         )
@@ -104,51 +103,49 @@ impl EventHandler {
 
     /// Handle individual packet based on type
     async fn handle_packet(
-        packet_id: PacketId,
-        payload: &[u8],
+        packet: Packet,
         state: &Arc<RwLock<ClientState>>,
         event_tx: &Sender<VoiceClientEvent>,
     ) -> Result<(), String> {
-        match packet_id {
-            PacketId::LoginResponse => {
-                Self::handle_login_response(payload, state, event_tx).await
+        match packet {
+            Packet::LoginResponse { request_id: _, id, voice_token: _, participants } => {
+                Self::handle_login_response(id, participants, state, event_tx).await
             }
-            PacketId::JoinVoiceChannelResponse => {
+            Packet::JoinVoiceChannelResponse { request_id: _, success: _ } => {
                 Self::handle_join_voice_channel_response(state).await
             }
-            PacketId::LeaveVoiceChannelResponse => {
+            Packet::LeaveVoiceChannelResponse { request_id: _, success: _ } => {
                 Self::handle_leave_voice_channel_response(state).await
             }
-            PacketId::UserJoinedServer => {
-                Self::handle_user_joined_server(payload, state, event_tx).await
+            Packet::UserJoinedServer { participant } => {
+                Self::handle_user_joined_server(participant, state, event_tx).await
             }
-            PacketId::UserLeftServer => {
-                Self::handle_user_left_server(payload, state, event_tx).await
+            Packet::UserLeftServer { user_id } => {
+                Self::handle_user_left_server(user_id, state, event_tx).await
             }
-            PacketId::UserJoinedVoice => {
-                Self::handle_user_joined_voice(payload, state, event_tx).await
+            Packet::UserJoinedVoice { user_id } => {
+                Self::handle_user_joined_voice(user_id, state, event_tx).await
             }
-            PacketId::UserLeftVoice => {
-                Self::handle_user_left_voice(payload, state, event_tx).await
+            Packet::UserLeftVoice { user_id } => {
+                Self::handle_user_left_voice(user_id, state, event_tx).await
             }
-            PacketId::UserSentMessage => Self::handle_user_sent_message(payload, event_tx).await,
+            Packet::UserSentMessage { user_id, timestamp, username: _, message } => {
+                Self::handle_user_sent_message(user_id, timestamp, message, event_tx).await
+            }
             _ => { Ok(()) }
         }
     }
 
     async fn handle_login_response(
-        payload: &[u8],
+        id: u64,
+        participants: Vec<ParticipantInfo>,
         state: &Arc<RwLock<ClientState>>,
         event_tx: &Sender<VoiceClientEvent>,
     ) -> Result<(), String> {
-        let response = voiceapp_protocol::decode_login_response(payload)
-            .map_err(|e| format!("Decode error: {}", e))?;
-
         // Update client state with user_id and participants
         let mut s = state.write().await;
-        s.user_id = Some(response.id);
-        s.participants = response
-            .participants
+        s.user_id = Some(id);
+        s.participants = participants
             .iter()
             .map(|p| (p.user_id, p.clone()))
             .collect();
@@ -157,12 +154,12 @@ impl EventHandler {
         // Emit ParticipantsList event
         let _ = event_tx
             .send(VoiceClientEvent::ParticipantsList {
-                user_id: response.id,
-                participants: response.participants,
+                user_id: id,
+                participants,
             })
             .await;
 
-        debug!("Login successful: user_id={}", response.id);
+        debug!("Login successful: user_id={}", id);
         Ok(())
     }
 
@@ -189,22 +186,15 @@ impl EventHandler {
     }
 
     async fn handle_user_joined_server(
-        payload: &[u8],
+        participant: ParticipantInfo,
         state: &Arc<RwLock<ClientState>>,
         event_tx: &Sender<VoiceClientEvent>,
     ) -> Result<(), String> {
-        let (user_id, username) = voiceapp_protocol::decode_user_joined_server(payload)
-            .map_err(|e| format!("Decode error: {}", e))?;
+        let user_id = participant.user_id;
+        let username = participant.username.clone();
 
         let mut s = state.write().await;
-        s.participants.insert(
-            user_id,
-            ParticipantInfo {
-                user_id,
-                username: username.clone(),
-                in_voice: false,
-            },
-        );
+        s.participants.insert(user_id, participant);
         drop(s);
 
         let _ = event_tx
@@ -216,13 +206,10 @@ impl EventHandler {
     }
 
     async fn handle_user_left_server(
-        payload: &[u8],
+        user_id: u64,
         state: &Arc<RwLock<ClientState>>,
         event_tx: &Sender<VoiceClientEvent>,
     ) -> Result<(), String> {
-        let user_id = voiceapp_protocol::decode_user_left_server(payload)
-            .map_err(|e| format!("Decode error: {}", e))?;
-
         let mut s = state.write().await;
         s.participants.remove(&user_id);
         drop(s);
@@ -234,13 +221,10 @@ impl EventHandler {
     }
 
     async fn handle_user_joined_voice(
-        payload: &[u8],
+        user_id: u64,
         state: &Arc<RwLock<ClientState>>,
         event_tx: &Sender<VoiceClientEvent>,
     ) -> Result<(), String> {
-        let user_id = voiceapp_protocol::decode_user_joined_voice(payload)
-            .map_err(|e| format!("Decode error: {}", e))?;
-
         let mut s = state.write().await;
         if let Some(participant) = s.participants.get_mut(&user_id) {
             participant.in_voice = true;
@@ -256,13 +240,10 @@ impl EventHandler {
     }
 
     async fn handle_user_left_voice(
-        payload: &[u8],
+        user_id: u64,
         state: &Arc<RwLock<ClientState>>,
         event_tx: &Sender<VoiceClientEvent>,
     ) -> Result<(), String> {
-        let user_id = voiceapp_protocol::decode_user_left_voice(payload)
-            .map_err(|e| format!("Decode error: {}", e))?;
-
         let mut s = state.write().await;
         if let Some(participant) = s.participants.get_mut(&user_id) {
             participant.in_voice = false;
@@ -278,17 +259,16 @@ impl EventHandler {
     }
 
     async fn handle_user_sent_message(
-        payload: &[u8],
+        user_id: u64,
+        timestamp: u64,
+        message: String,
         event_tx: &Sender<VoiceClientEvent>,
     ) -> Result<(), String> {
-        let (user_id, timestamp, message) = voiceapp_protocol::decode_user_sent_message(payload)
-            .map_err(|e| format!("Decode error: {}", e))?;
-
         let _ = event_tx
             .send(VoiceClientEvent::UserSentMessage {
                 user_id,
                 timestamp,
-                message: message.clone(),
+                message,
             })
             .await;
 

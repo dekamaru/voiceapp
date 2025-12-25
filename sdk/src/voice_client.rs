@@ -1,8 +1,9 @@
 use async_channel::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 
-use voiceapp_protocol::PacketId;
+use voiceapp_protocol::Packet;
 pub use crate::error::VoiceClientError;
 use crate::tcp_client::TcpClient;
 use crate::udp_client::UdpClient;
@@ -15,6 +16,7 @@ pub struct VoiceClient {
     udp_client: UdpClient,
     event_handler: EventHandler,
     voice_io_manager: Mutex<VoiceInputOutputManager>,
+    request_id_counter: AtomicU64,
 }
 
 impl VoiceClient {
@@ -38,7 +40,13 @@ impl VoiceClient {
             udp_client,
             event_handler,
             voice_io_manager,
+            request_id_counter: AtomicU64::new(1),
         })
+    }
+
+    /// Generate a unique request ID
+    fn next_request_id(&self) -> u64 {
+        self.request_id_counter.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Subscribe to the event stream from VoiceClient
@@ -107,30 +115,51 @@ impl VoiceClient {
 
     /// Authenticate with management server via TCP
     async fn authenticate_management(&self, username: &str) -> Result<u64, VoiceClientError> {
+        let request_id = self.next_request_id();
+        let request = Packet::LoginRequest {
+            request_id,
+            username: username.to_string(),
+        };
+
         let response = self
             .tcp_client
             .send_request_with_response(
-                voiceapp_protocol::encode_login_request(username),
-                PacketId::LoginResponse,
-                voiceapp_protocol::decode_login_response,
+                request.encode(),
+                request_id,
+                |packet| {
+                    if let Packet::LoginResponse { request_id: _, id, voice_token, participants: _ } = packet {
+                        Ok((id, voice_token))
+                    } else {
+                        Err("Expected LoginResponse packet".to_string())
+                    }
+                },
             )
             .await?;
 
-        let voice_token = response.voice_token;
+        let (user_id, voice_token) = response;
 
-        info!("[Management server] Authenticated, user_id={}", response.id);
+        info!("[Management server] Authenticated, user_id={}", user_id);
 
         Ok(voice_token)
     }
 
     /// Authenticate with voice server via UDP
     async fn authenticate_voice(&self, voice_token: u64) -> Result<(), VoiceClientError> {
+        let request_id = self.next_request_id();
+        let request = Packet::VoiceAuthRequest { request_id, voice_token };
+
         let success = self
             .udp_client
             .send_request_with_response(
-                voiceapp_protocol::encode_voice_auth_request(voice_token),
-                PacketId::VoiceAuthResponse,
-                voiceapp_protocol::decode_voice_auth_response,
+                request.encode(),
+                request_id,
+                |packet| {
+                    if let Packet::VoiceAuthResponse { request_id: _, success } = packet {
+                        Ok(success)
+                    } else {
+                        Err("Expected VoiceAuthResponse packet".to_string())
+                    }
+                },
             )
             .await?;
 
@@ -146,27 +175,39 @@ impl VoiceClient {
     }
 
     pub async fn join_channel(&self) -> Result<(), VoiceClientError> {
+        let request_id = self.next_request_id();
+        let request = Packet::JoinVoiceChannelRequest { request_id };
+
         self.tcp_client.send_request(
-            voiceapp_protocol::encode_join_voice_channel_request(),
-            PacketId::JoinVoiceChannelResponse,
+            request.encode(),
+            request_id,
         ).await?;
 
         Ok(())
     }
 
     pub async fn leave_channel(&self) -> Result<(), VoiceClientError> {
+        let request_id = self.next_request_id();
+        let request = Packet::LeaveVoiceChannelRequest { request_id };
+
         self.tcp_client.send_request(
-            voiceapp_protocol::encode_leave_voice_channel_request(),
-            PacketId::LeaveVoiceChannelResponse
+            request.encode(),
+            request_id,
         ).await?;
         
         Ok(())
     }
 
     pub async fn send_message(&self, message: &str) -> Result<(), VoiceClientError> {
+        let request_id = self.next_request_id();
+        let request = Packet::ChatMessageRequest {
+            request_id,
+            message: message.to_string(),
+        };
+
         self.tcp_client.send_request(
-            voiceapp_protocol::encode_chat_message_request(message),
-            PacketId::ChatMessageResponse,
+            request.encode(),
+            request_id,
         ).await?;
         
         Ok(())

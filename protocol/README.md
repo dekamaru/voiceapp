@@ -33,7 +33,7 @@ let bytes = packet.encode();
 use voiceapp_protocol::Packet;
 
 let bytes = receive_from_network();
-let packet = Packet::decode(&bytes)?;
+let (packet, size) = Packet::decode(&bytes)?;
 
 match packet {
     Packet::LoginRequest { username } => {
@@ -44,6 +44,9 @@ match packet {
     }
     _ => {}
 }
+
+// For TCP streaming, use consumed to advance buffer
+buffer.drain(..size);
 ```
 
 ## Packet Types

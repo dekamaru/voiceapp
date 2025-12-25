@@ -14,25 +14,25 @@ pub struct ParticipantInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Packet {
     // Requests
-    LoginRequest { username: String },
-    VoiceAuthRequest { voice_token: u64 },
-    JoinVoiceChannelRequest,
-    LeaveVoiceChannelRequest,
-    ChatMessageRequest { message: String },
+    LoginRequest { request_id: u64, username: String },
+    VoiceAuthRequest { request_id: u64, voice_token: u64 },
+    JoinVoiceChannelRequest { request_id: u64 },
+    LeaveVoiceChannelRequest { request_id: u64 },
+    ChatMessageRequest { request_id: u64, message: String },
 
     // Responses
-    LoginResponse { id: u64, voice_token: u64, participants: Vec<ParticipantInfo> },
-    VoiceAuthResponse { success: bool },
-    JoinVoiceChannelResponse { success: bool },
-    LeaveVoiceChannelResponse { success: bool },
-    ChatMessageResponse { success: bool },
+    LoginResponse { request_id: u64, id: u64, voice_token: u64, participants: Vec<ParticipantInfo> },
+    VoiceAuthResponse { request_id: u64, success: bool },
+    JoinVoiceChannelResponse { request_id: u64, success: bool },
+    LeaveVoiceChannelResponse { request_id: u64, success: bool },
+    ChatMessageResponse { request_id: u64, success: bool },
 
     // Events
     UserJoinedServer { participant: ParticipantInfo },
     UserJoinedVoice { user_id: u64 },
     UserLeftVoice { user_id: u64 },
     UserLeftServer { user_id: u64 },
-    UserSentMessage { user_id: u64, username: String, message: String },
+    UserSentMessage { user_id: u64, timestamp: u64, username: String, message: String },
 
     // UDP
     VoiceData { user_id: u64, sequence: u32, timestamp: u32, data: Vec<u8> },
@@ -46,7 +46,7 @@ impl Packet {
         let mut writer = Writer::new();
 
         // Write packet_id
-        writer.write_u8(self.packet_id().as_u8());
+        writer.write_u8(self.id());
 
         // Reserve space for payload_len, we'll fill it in later
         let len_pos = writer.reserve_u16();
@@ -54,33 +54,50 @@ impl Packet {
 
         // Write payload
         match self {
-            Packet::LoginRequest { username } => {
+            Packet::LoginRequest { request_id, username } => {
+                writer.write_u64(*request_id);
                 writer.write_string(username);
             }
-            Packet::VoiceAuthRequest { voice_token } => {
+            Packet::VoiceAuthRequest { request_id, voice_token } => {
+                writer.write_u64(*request_id);
                 writer.write_u64(*voice_token);
             }
-            Packet::JoinVoiceChannelRequest | Packet::LeaveVoiceChannelRequest => {
-                // No payload
+            Packet::JoinVoiceChannelRequest { request_id } => {
+                writer.write_u64(*request_id);
             }
-            Packet::ChatMessageRequest { message } => {
+            Packet::LeaveVoiceChannelRequest { request_id } => {
+                writer.write_u64(*request_id);
+            }
+            Packet::ChatMessageRequest { request_id, message } => {
+                writer.write_u64(*request_id);
                 writer.write_string(message);
             }
-            Packet::LoginResponse { id, voice_token, participants } => {
+            Packet::LoginResponse { request_id, id, voice_token, participants } => {
+                writer.write_u64(*request_id);
                 writer.write_u64(*id);
                 writer.write_u64(*voice_token);
                 writer.write_u16(participants.len() as u16);
-                
+
                 for participant in participants {
                     writer.write_u64(participant.user_id);
                     writer.write_string(&participant.username);
                     writer.write_bool(participant.in_voice);
                 }
             }
-            Packet::VoiceAuthResponse { success }
-            | Packet::JoinVoiceChannelResponse { success }
-            | Packet::LeaveVoiceChannelResponse { success }
-            | Packet::ChatMessageResponse { success } => {
+            Packet::VoiceAuthResponse { request_id, success } => {
+                writer.write_u64(*request_id);
+                writer.write_bool(*success);
+            }
+            Packet::JoinVoiceChannelResponse { request_id, success } => {
+                writer.write_u64(*request_id);
+                writer.write_bool(*success);
+            }
+            Packet::LeaveVoiceChannelResponse { request_id, success } => {
+                writer.write_u64(*request_id);
+                writer.write_bool(*success);
+            }
+            Packet::ChatMessageResponse { request_id, success } => {
+                writer.write_u64(*request_id);
                 writer.write_bool(*success);
             }
             Packet::UserJoinedServer { participant } => {
@@ -93,8 +110,9 @@ impl Packet {
             | Packet::UserLeftServer { user_id } => {
                 writer.write_u64(*user_id);
             }
-            Packet::UserSentMessage { user_id, username, message } => {
+            Packet::UserSentMessage { user_id, timestamp, username, message } => {
                 writer.write_u64(*user_id);
+                writer.write_u64(*timestamp);
                 writer.write_string(username);
                 writer.write_string(message);
             }
@@ -115,8 +133,9 @@ impl Packet {
 
     /// Decode packet from wire format.
     ///
+    /// Returns decoded packet and number of bytes consumed from the buffer.
     /// Returns error if buffer is incomplete or contains invalid data.
-    pub fn decode(buf: &[u8]) -> Result<Self, ProtocolError> {
+    pub fn decode(buf: &[u8]) -> Result<(Self, usize), ProtocolError> {
         let mut reader = Reader::new(buf);
 
         let packet_id = PacketId::try_from(reader.read_u8()?)?;
@@ -132,26 +151,32 @@ impl Packet {
 
         let mut payload_reader = Reader::new(&remaining[..payload_len]);
 
-        match packet_id {
+        let packet = match packet_id {
             PacketId::LoginRequest => {
+                let request_id = payload_reader.read_u64()?;
                 let username = payload_reader.read_string()?;
-                Ok(Packet::LoginRequest { username })
+                Packet::LoginRequest { request_id, username }
             }
             PacketId::VoiceAuthRequest => {
+                let request_id = payload_reader.read_u64()?;
                 let voice_token = payload_reader.read_u64()?;
-                Ok(Packet::VoiceAuthRequest { voice_token })
+                Packet::VoiceAuthRequest { request_id, voice_token }
             }
             PacketId::JoinVoiceChannelRequest => {
-                Ok(Packet::JoinVoiceChannelRequest)
+                let request_id = payload_reader.read_u64()?;
+                Packet::JoinVoiceChannelRequest { request_id }
             }
             PacketId::LeaveVoiceChannelRequest => {
-                Ok(Packet::LeaveVoiceChannelRequest)
+                let request_id = payload_reader.read_u64()?;
+                Packet::LeaveVoiceChannelRequest { request_id }
             }
             PacketId::ChatMessageRequest => {
+                let request_id = payload_reader.read_u64()?;
                 let message = payload_reader.read_string()?;
-                Ok(Packet::ChatMessageRequest { message })
+                Packet::ChatMessageRequest { request_id, message }
             }
             PacketId::LoginResponse => {
+                let request_id = payload_reader.read_u64()?;
                 let id = payload_reader.read_u64()?;
                 let voice_token = payload_reader.read_u64()?;
                 let participant_count = payload_reader.read_u16()? as usize;
@@ -162,65 +187,72 @@ impl Packet {
                     let in_voice = payload_reader.read_bool()?;
                     participants.push(ParticipantInfo { user_id, username, in_voice });
                 }
-                Ok(Packet::LoginResponse { id, voice_token, participants })
+                Packet::LoginResponse { request_id, id, voice_token, participants }
             }
             PacketId::VoiceAuthResponse => {
+                let request_id = payload_reader.read_u64()?;
                 let success = payload_reader.read_bool()?;
-                Ok(Packet::VoiceAuthResponse { success })
+                Packet::VoiceAuthResponse { request_id, success }
             }
             PacketId::JoinVoiceChannelResponse => {
+                let request_id = payload_reader.read_u64()?;
                 let success = payload_reader.read_bool()?;
-                Ok(Packet::JoinVoiceChannelResponse { success })
+                Packet::JoinVoiceChannelResponse { request_id, success }
             }
             PacketId::LeaveVoiceChannelResponse => {
+                let request_id = payload_reader.read_u64()?;
                 let success = payload_reader.read_bool()?;
-                Ok(Packet::LeaveVoiceChannelResponse { success })
+                Packet::LeaveVoiceChannelResponse { request_id, success }
             }
             PacketId::ChatMessageResponse => {
+                let request_id = payload_reader.read_u64()?;
                 let success = payload_reader.read_bool()?;
-                Ok(Packet::ChatMessageResponse { success })
+                Packet::ChatMessageResponse { request_id, success }
             }
             PacketId::UserJoinedServer => {
                 let user_id = payload_reader.read_u64()?;
                 let username = payload_reader.read_string()?;
                 let in_voice = payload_reader.read_bool()?;
                 let participant = ParticipantInfo { user_id, username, in_voice };
-                Ok(Packet::UserJoinedServer { participant })
+                Packet::UserJoinedServer { participant }
             }
             PacketId::UserJoinedVoice => {
                 let user_id = payload_reader.read_u64()?;
-                Ok(Packet::UserJoinedVoice { user_id })
+                Packet::UserJoinedVoice { user_id }
             }
             PacketId::UserLeftVoice => {
                 let user_id = payload_reader.read_u64()?;
-                Ok(Packet::UserLeftVoice { user_id })
+                Packet::UserLeftVoice { user_id }
             }
             PacketId::UserLeftServer => {
                 let user_id = payload_reader.read_u64()?;
-                Ok(Packet::UserLeftServer { user_id })
+                Packet::UserLeftServer { user_id }
             }
             PacketId::UserSentMessage => {
                 let user_id = payload_reader.read_u64()?;
+                let timestamp = payload_reader.read_u64()?;
                 let username = payload_reader.read_string()?;
                 let message = payload_reader.read_string()?;
-                Ok(Packet::UserSentMessage { user_id, username, message })
+                Packet::UserSentMessage { user_id, timestamp, username, message }
             }
             PacketId::VoiceData => {
                 let user_id = payload_reader.read_u64()?;
                 let sequence = payload_reader.read_u32()?;
                 let timestamp = payload_reader.read_u32()?;
                 let data = payload_reader.remaining().to_vec();
-                Ok(Packet::VoiceData { user_id, sequence, timestamp, data })
+                Packet::VoiceData { user_id, sequence, timestamp, data }
             }
-        }
+        };
+
+        Ok((packet, reader.position() + payload_len))
     }
 
-    fn packet_id(&self) -> PacketId {
+    pub fn id(&self) -> u8 {
         match self {
             Packet::LoginRequest { .. } => PacketId::LoginRequest,
             Packet::VoiceAuthRequest { .. } => PacketId::VoiceAuthRequest,
-            Packet::JoinVoiceChannelRequest => PacketId::JoinVoiceChannelRequest,
-            Packet::LeaveVoiceChannelRequest => PacketId::LeaveVoiceChannelRequest,
+            Packet::JoinVoiceChannelRequest { .. } => PacketId::JoinVoiceChannelRequest,
+            Packet::LeaveVoiceChannelRequest { .. } => PacketId::LeaveVoiceChannelRequest,
             Packet::ChatMessageRequest { .. } => PacketId::ChatMessageRequest,
             Packet::LoginResponse { .. } => PacketId::LoginResponse,
             Packet::VoiceAuthResponse { .. } => PacketId::VoiceAuthResponse,
@@ -233,7 +265,7 @@ impl Packet {
             Packet::UserLeftServer { .. } => PacketId::UserLeftServer,
             Packet::UserSentMessage { .. } => PacketId::UserSentMessage,
             Packet::VoiceData { .. } => PacketId::VoiceData,
-        }
+        }.as_u8()
     }
 }
 
@@ -243,13 +275,15 @@ mod tests {
 
     fn roundtrip(packet: Packet) {
         let encoded = packet.encode();
-        let decoded = Packet::decode(&encoded).expect("decode failed");
+        let (decoded, size) = Packet::decode(&encoded).expect("decode failed");
         assert_eq!(packet, decoded);
+        assert_eq!(encoded.len(), size);
     }
 
     #[test]
     fn roundtrip_string_encoding() {
         roundtrip(Packet::LoginRequest {
+            request_id: 1,
             username: "alice".to_string(),
         });
     }
@@ -257,24 +291,26 @@ mod tests {
     #[test]
     fn roundtrip_u64_encoding() {
         roundtrip(Packet::VoiceAuthRequest {
+            request_id: 2,
             voice_token: 0x1234567890ABCDEF,
         });
     }
 
     #[test]
     fn roundtrip_empty_payload() {
-        roundtrip(Packet::JoinVoiceChannelRequest);
+        roundtrip(Packet::JoinVoiceChannelRequest { request_id: 3 });
     }
 
     #[test]
     fn roundtrip_bool_encoding() {
-        roundtrip(Packet::VoiceAuthResponse { success: true });
-        roundtrip(Packet::VoiceAuthResponse { success: false });
+        roundtrip(Packet::VoiceAuthResponse { request_id: 4, success: true });
+        roundtrip(Packet::VoiceAuthResponse { request_id: 5, success: false });
     }
 
     #[test]
     fn roundtrip_struct_with_list() {
         roundtrip(Packet::LoginResponse {
+            request_id: 6,
             id: 42,
             voice_token: 0xDEADBEEF,
             participants: vec![
@@ -296,6 +332,7 @@ mod tests {
     fn roundtrip_multiple_strings() {
         roundtrip(Packet::UserSentMessage {
             user_id: 111,
+            timestamp: 0xDEADBEEF,
             username: "dave".to_string(),
             message: "Test message".to_string(),
         });
@@ -314,6 +351,7 @@ mod tests {
     #[test]
     fn roundtrip_empty_string() {
         roundtrip(Packet::LoginRequest {
+            request_id: 7,
             username: "".to_string(),
         });
     }
@@ -322,6 +360,7 @@ mod tests {
     fn roundtrip_unicode_string() {
         roundtrip(Packet::UserSentMessage {
             user_id: 1,
+            timestamp: 0xDEADBEEF,
             username: "François".to_string(),
             message: "用户🎉 Привет мир! 🌍".to_string(),
         });
@@ -330,6 +369,7 @@ mod tests {
     #[test]
     fn roundtrip_empty_list() {
         roundtrip(Packet::LoginResponse {
+            request_id: 8,
             id: 1,
             voice_token: 123,
             participants: vec![],

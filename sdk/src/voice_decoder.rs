@@ -2,7 +2,14 @@ use neteq::codec::{AudioDecoder, OpusDecoder};
 use neteq::{AudioPacket, NetEq, NetEqConfig, RtpHeader};
 use rubato::{FftFixedIn, Resampler};
 use std::sync::{Mutex};
-use voiceapp_protocol::VoiceData;
+
+/// Voice data packet structure for decoder
+pub struct VoiceData {
+    pub sequence: u32,
+    pub timestamp: u32,
+    pub ssrc: u64,
+    pub opus_frame: Vec<u8>,
+}
 
 const OPUS_SAMPLE_RATE: u32 = 48000;
 const FRAME_LENGTH_MS: u32 = 20;

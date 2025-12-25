@@ -1,5 +1,12 @@
 use opus::{Bitrate, Channels, Encoder};
-use voiceapp_protocol::VoiceData;
+
+/// Voice data packet structure for encoder
+pub struct VoiceData {
+    pub sequence: u32,
+    pub timestamp: u32,
+    pub ssrc: u64,
+    pub opus_frame: Vec<u8>,
+}
 
 pub const SAMPLE_RATE: u32 = 48000;
 pub const OPUS_FRAME_SAMPLES: usize = 960; // 20ms at 48kHz
