@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect to voice server
     info!("Connecting to voice servers...");
-    let client = VoiceClient::new()?;
+    let client = VoiceClient::new();
     client.connect(&server_addr, &voice_server_addr, "music_bot").await?;
     client.join_channel().await?;
     info!("Connected!");

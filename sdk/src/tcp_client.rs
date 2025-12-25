@@ -15,6 +15,7 @@ const REQUEST_TIMEOUT_SECS: u64 = 5;
 type RequestCallback = (u64, oneshot::Sender<Packet>);
 
 /// TCP client for managing request/response communication
+#[derive(Clone)]
 pub struct TcpClient {
     send_tx: Sender<(Vec<u8>, Option<RequestCallback>)>,
     send_rx: Receiver<(Vec<u8>, Option<RequestCallback>)>,
@@ -54,17 +55,23 @@ impl TcpClient {
         Ok(())
     }
 
-    /// Send request and wait for acknowledgment
+    /// Send request packet and wait for response
     pub async fn send_request(
         &self,
-        request: Vec<u8>,
-        request_id: u64,
+        request: Packet,
     ) -> Result<Packet, VoiceClientError> {
+        // Extract request_id from the packet
+        let request_id = request.request_id()
+            .ok_or_else(|| VoiceClientError::ConnectionFailed("Packet does not have request_id".to_string()))?;
+
         let (response_tx, response_rx) = oneshot::channel();
+
+        // Encode packet
+        let encoded = request.encode();
 
         // Send request with callback registered for expected response
         self.send_tx
-            .send((request, Some((request_id, response_tx))))
+            .send((encoded, Some((request_id, response_tx))))
             .await
             .map_err(|_| VoiceClientError::Disconnected)?;
 
@@ -73,17 +80,16 @@ impl TcpClient {
             .await
     }
 
-    /// Send request and wait for decoded response
+    /// Send request packet and wait for decoded response
     pub async fn send_request_with_response<T, F>(
         &self,
-        request: Vec<u8>,
-        request_id: u64,
+        request: Packet,
         decoder: F,
     ) -> Result<T, VoiceClientError>
     where
         F: Fn(Packet) -> Result<T, String>,
     {
-        let packet = self.send_request(request, request_id).await?;
+        let packet = self.send_request(request).await?;
         decoder(packet).map_err(|e| VoiceClientError::ConnectionFailed(e))
     }
 
@@ -187,17 +193,7 @@ impl TcpClient {
 
                             debug!("Received TCP packet: ID 0x{:02x}", packet_id);
 
-                            // Extract request_id from response packets and check if this is a pending response
-                            let request_id = match &packet {
-                                Packet::LoginResponse { request_id, .. } => Some(*request_id),
-                                Packet::VoiceAuthResponse { request_id, .. } => Some(*request_id),
-                                Packet::JoinVoiceChannelResponse { request_id, .. } => Some(*request_id),
-                                Packet::LeaveVoiceChannelResponse { request_id, .. } => Some(*request_id),
-                                Packet::ChatMessageResponse { request_id, .. } => Some(*request_id),
-                                _ => None,
-                            };
-
-                            if let Some(req_id) = request_id {
+                            if let Some(req_id) = packet.request_id() {
                                 if let Some(tx) = pending_responses.remove(&req_id) {
                                     let _ = tx.send(packet.clone());
                                 }

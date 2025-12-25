@@ -267,6 +267,30 @@ impl Packet {
             Packet::VoiceData { .. } => PacketId::VoiceData,
         }.as_u8()
     }
+
+    /// Get request_id if this packet has one.
+    ///
+    /// Returns Some(request_id) for request/response packets, None for events and voice data.
+    pub fn request_id(&self) -> Option<u64> {
+        match self {
+            Packet::LoginRequest { request_id, .. } => Some(*request_id),
+            Packet::VoiceAuthRequest { request_id, .. } => Some(*request_id),
+            Packet::JoinVoiceChannelRequest { request_id } => Some(*request_id),
+            Packet::LeaveVoiceChannelRequest { request_id } => Some(*request_id),
+            Packet::ChatMessageRequest { request_id, .. } => Some(*request_id),
+            Packet::LoginResponse { request_id, .. } => Some(*request_id),
+            Packet::VoiceAuthResponse { request_id, .. } => Some(*request_id),
+            Packet::JoinVoiceChannelResponse { request_id, .. } => Some(*request_id),
+            Packet::LeaveVoiceChannelResponse { request_id, .. } => Some(*request_id),
+            Packet::ChatMessageResponse { request_id, .. } => Some(*request_id),
+            Packet::UserJoinedServer { .. } => None,
+            Packet::UserJoinedVoice { .. } => None,
+            Packet::UserLeftVoice { .. } => None,
+            Packet::UserLeftServer { .. } => None,
+            Packet::UserSentMessage { .. } => None,
+            Packet::VoiceData { .. } => None,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@ pub mod tcp_client;
 pub mod udp_client;
 pub mod event_handler;
 pub mod voice_client;
+pub mod api_client;
 pub mod voice_decoder;
 pub mod voice_encoder;
 pub mod voice_input_pipeline;
@@ -10,6 +11,7 @@ pub mod error;
 
 pub use event_handler::VoiceClientEvent;
 pub use voice_client::{VoiceClient};
+pub use api_client::ApiClient;
 pub use voice_decoder::{VoiceDecoder, VoiceDecoderError};
 pub use voice_encoder::{VoiceEncoder, OPUS_FRAME_SAMPLES, SAMPLE_RATE};
 pub use voice_input_pipeline::{VoiceInputPipeline, VoiceInputPipelineConfig};

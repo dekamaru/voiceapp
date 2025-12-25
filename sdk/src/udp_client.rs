@@ -16,6 +16,7 @@ const REQUEST_TIMEOUT_SECS: u64 = 5;
 const MAX_RETRY_ATTEMPTS: u32 = 3;
 
 /// UDP client for managing voice data communication
+#[derive(Clone)]
 pub struct UdpClient {
     send_tx: Sender<Vec<u8>>,
     send_rx: Receiver<Vec<u8>>,
@@ -68,16 +69,19 @@ impl UdpClient {
         Ok(())
     }
 
-    /// Send request and wait for decoded response with retry logic
+    /// Send request packet and wait for decoded response with retry logic
     pub async fn send_request_with_response<T, F>(
         &self,
-        request: Vec<u8>,
-        request_id: u64,
+        request: Packet,
         decoder: F,
     ) -> Result<T, VoiceClientError>
     where
         F: Fn(Packet) -> Result<T, String>,
     {
+        // Extract request_id from the packet
+        let request_id = request.request_id()
+            .ok_or_else(|| VoiceClientError::ConnectionFailed("Packet does not have request_id".to_string()))?;
+
         for attempt in 1..=MAX_RETRY_ATTEMPTS {
             debug!(
                 "[UDP] Sending request with response (attempt {}/{})",
@@ -92,7 +96,7 @@ impl UdpClient {
 
             // Send request
             self.send_tx
-                .send(request.clone())
+                .send(request.encode())
                 .await
                 .map_err(|_| VoiceClientError::Disconnected)?;
 

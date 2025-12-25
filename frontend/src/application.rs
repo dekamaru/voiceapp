@@ -74,7 +74,7 @@ pub struct Application {
 impl Application {
     pub fn new() -> (Self, Task<Message>) {
         let config = AppConfig::load().unwrap();
-        let voice_client = Arc::new(VoiceClient::new().expect("failed to init voice client"));
+        let voice_client = Arc::new(VoiceClient::new());
         let events_task = Task::run(voice_client.event_stream(), |e| Message::ServerEventReceived(e));
         let auto_login_task = if config.server.is_credentials_filled() {
             info!("Credentials read from config, performing auto login");
