@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::time::Duration;
 use crate::audio::{find_best_input_stream_config, find_best_output_stream_config, find_input_device_by_name, find_output_device_by_name, AudioManager};
 use crate::pages::login::{LoginPage, LoginPageMessage};
 use crate::pages::room::{RoomPage, RoomPageMessage};
 use crate::pages::settings::{SettingsPage, SettingsPageMessage};
-use iced::Task;
-use std::sync::Arc;
+use iced::{Task, Subscription};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use arc_swap::ArcSwap;
 use tracing::{error, info};
 use voiceapp_sdk::{Client, ClientEvent};
@@ -28,6 +29,10 @@ pub enum Message {
 
     // Keyboard events
     KeyPressed(iced::keyboard::Key),
+
+    // Config persistence
+    PeriodicConfigSave,
+    WindowCloseRequested(iced::window::Id),
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +75,7 @@ pub struct Application {
     voice_client: Arc<Client>,
     audio_manager: AudioManager,
     config: Arc<ArcSwap<AppConfig>>,
+    config_dirty: Arc<AtomicBool>,
 }
 
 impl Application {
@@ -115,6 +121,7 @@ impl Application {
                 voice_client,
                 audio_manager,
                 config,
+                config_dirty: Arc::new(AtomicBool::new(false)),
             },
             Task::batch([on_open_task, events_task, auto_login_task]),
         )
@@ -300,6 +307,15 @@ impl Application {
 
                 Task::none()
             }
+            Message::PeriodicConfigSave => {
+                self.save_config_if_dirty();
+                Task::none()
+            }
+            Message::WindowCloseRequested(id) => {
+                info!("Window close requested, flushing config to disk");
+                self.save_config_if_dirty();
+                iced::window::close(*id)
+            }
             _ => Task::none()
         };
 
@@ -309,13 +325,22 @@ impl Application {
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
-        iced::event::listen().filter_map(|event| {
-            if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, .. }) = event {
-                Some(Message::KeyPressed(key))
-            } else {
-                None
-            }
-        })
+        Subscription::batch([
+            // Keyboard events
+            iced::event::listen().filter_map(|event| {
+                if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, .. }) = event {
+                    Some(Message::KeyPressed(key))
+                } else {
+                    None
+                }
+            }),
+
+            // Periodic config save (every 10 seconds)
+            iced::time::every(Duration::from_secs(10)).map(|_| Message::PeriodicConfigSave),
+
+            // Save config on window close request
+            iced::window::close_requests().map(Message::WindowCloseRequested),
+        ])
     }
 
     fn handle_voice_command(&self, command: VoiceCommand) -> Task<Message> {
@@ -377,13 +402,26 @@ impl Application {
         let mut new_config = (*current_config).clone();
         updater(&mut new_config);
 
-        let new_arc = Arc::new(new_config);
-        self.config.store(new_arc.clone());
+        // Only mark dirty if config actually changed
+        if *current_config != new_config {
+            let new_arc = Arc::new(new_config);
+            self.config.store(new_arc);
+            self.config_dirty.store(true, Ordering::Relaxed);
+        }
+    }
 
-        match new_arc.save() {
-            Ok(_) => {}
-            Err(e) => {
-                error!("failed to save configuration: {}", e);
+    fn save_config_if_dirty(&self) {
+        if self.config_dirty.swap(false, Ordering::Relaxed) {
+            let config = self.config.load_full();
+            match config.save() {
+                Ok(_) => {
+                    info!("Configuration saved to disk");
+                }
+                Err(e) => {
+                    error!("Failed to save configuration: {}", e);
+                    // Set dirty flag back if save failed
+                    self.config_dirty.store(true, Ordering::Relaxed);
+                }
             }
         }
     }

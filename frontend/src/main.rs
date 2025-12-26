@@ -38,6 +38,10 @@ fn main() -> iced::Result {
         .font(include_bytes!("../resources/fonts/rubik-semibold.ttf").as_slice())
         .default_font(Font::with_name("Rubik"))
         .antialiasing(true)
+        .window(iced::window::Settings {
+            exit_on_close_request: false,
+            ..Default::default()
+        })
         .run()
 }
 

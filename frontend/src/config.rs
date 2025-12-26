@@ -4,26 +4,26 @@ use std::path::PathBuf;
 use cpal::traits::{DeviceTrait, HostTrait};
 use crate::audio::{find_best_input_stream_config, find_best_output_stream_config};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub audio: AudioConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ServerConfig {
     pub address: String,
     pub username: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AudioConfig {
     pub input_device: AudioDevice,
     pub output_device: AudioDevice,
     pub input_sensitivity: u8
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AudioDevice {
     pub device_name: String,
     pub sample_rate: u32,
