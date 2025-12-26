@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+use std::str::FromStr;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, Device, SampleFormat, SampleRate, Stream, StreamConfig};
+use cpal::{BufferSize, Device, DeviceId, SampleFormat, SampleRate, Stream, StreamConfig};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 use crate::config::AudioDevice;
@@ -37,13 +39,13 @@ pub fn find_best_input_stream_config(
         for config in &configs {
             if config.sample_format() == format {
                 if let Some(rate) = target_rate {
-                    if config.min_sample_rate() <= SampleRate(rate)
-                        && config.max_sample_rate() >= SampleRate(rate)
+                    if config.min_sample_rate() <= rate
+                        && config.max_sample_rate() >= rate
                     {
-                        return Ok((SampleRate(rate), format, config.channels()));
+                        return Ok((rate, format, config.channels()));
                     }
                 } else {
-                    return Ok((config.min_sample_rate(), format, config.channels()));
+                    return Ok((config.max_sample_rate(), format, config.channels()));
                 }
             }
         }
@@ -51,7 +53,7 @@ pub fn find_best_input_stream_config(
 
     // Fallback: first available config
     let first_config = &configs[0];
-    Ok((first_config.min_sample_rate(), first_config.sample_format(), first_config.channels()))
+    Ok((first_config.max_sample_rate(), first_config.sample_format(), first_config.channels()))
 }
 
 /// Convert stereo to mono by averaging channels (F32)
@@ -77,16 +79,16 @@ fn stereo_to_mono(stereo: &[f32], channels: u16) -> Vec<f32> {
 /// Create input stream that captures audio and sends frames through channel
 /// Returns (stream, actual_sample_rate, receiver)
 pub fn create_input_stream(device_config: AudioDevice) -> Result<(Stream, mpsc::UnboundedReceiver<AudioFrame>), Box<dyn std::error::Error>> {
-    let device = match find_input_device_by_name(device_config.device_name.clone())? {
+    let device = match find_input_device_by_id(device_config.device_id.clone())? {
         Some(dev) => dev,
         None => {
-            return Err(format!("Input device '{}' not found", device_config.device_name).into());
+            return Err(format!("Input device '{}' not found", device_config.device_id).into());
         }
     };
 
     let stream_config = StreamConfig {
         channels: device_config.channels,
-        sample_rate: SampleRate(device_config.sample_rate),
+        sample_rate: device_config.sample_rate,
         buffer_size: BufferSize::Default
     };
 
@@ -149,16 +151,27 @@ pub fn create_input_stream(device_config: AudioDevice) -> Result<(Stream, mpsc::
     Ok((stream, rx))
 }
 
-pub fn list_input_devices() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+pub fn list_input_devices() -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
     let host = cpal::default_host();
     let devices = host.input_devices()?;
 
-    Ok(devices.map(|d| d.name().unwrap_or("unknown".to_string())).collect())
+    let mut result = HashMap::new();
+    for device in devices {
+        let id = device.id()?.to_string();
+        let name = device.description()?.name().to_string();
+        result.insert(id, name);
+    }
+
+    Ok(result)
 }
 
-pub fn find_input_device_by_name(name: String) -> Result<Option<Device>, Box<dyn std::error::Error>> {
+pub fn find_input_device_by_id(id: String) -> Result<Option<Device>, Box<dyn std::error::Error>> {
+    let parsed = DeviceId::from_str(&id)?;
     let host = cpal::default_host();
-    let mut devices = host.input_devices()?;
 
-    Ok(devices.find(|d| d.name().unwrap_or("unknown".to_string()) == name))
+    if let Some(device) = host.device_by_id(&parsed) {
+        Ok(Some(device))
+    } else {
+        Err(format!("Input device '{}' not found", &id).into())
+    }
 }

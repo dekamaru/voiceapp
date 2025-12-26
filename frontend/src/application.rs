@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
-use crate::audio::{find_best_input_stream_config, find_best_output_stream_config, find_input_device_by_name, find_output_device_by_name, AudioManager};
+use crate::audio::{find_best_input_stream_config, find_best_output_stream_config, find_input_device_by_id, find_output_device_by_id, AudioManager};
 use crate::pages::login::{LoginPage, LoginPageMessage};
 use crate::pages::room::{RoomPage, RoomPageMessage};
 use crate::pages::settings::{SettingsPage, SettingsPageMessage};
@@ -195,19 +195,19 @@ impl Application {
 
                 Task::batch([on_close_task, on_open_task])
             }
-            Message::SettingsPage(SettingsPageMessage::SelectInputDevice(device_name)) => {
-                info!("Selected input device: {}", device_name);
+            Message::SettingsPage(SettingsPageMessage::SelectInputDevice(device_id)) => {
+                info!("Selected input device: {}", device_id);
 
                 // Try to find device by name
-                let device = match find_input_device_by_name(device_name.clone()) {
+                let device = match find_input_device_by_id(device_id.clone()) {
                     Ok(Some(dev)) => dev,
                     Ok(None) => {
                         // TODO: refresh device list message
-                        error!("Device '{}' not found", device_name);
+                        error!("Device '{}' not found", device_id);
                         return Task::none();
                     }
                     Err(e) => {
-                        error!("Failed to find device '{}': {}", device_name, e);
+                        error!("Failed to find device '{}': {}", device_id, e);
                         return Task::none();
                     }
                 };
@@ -216,15 +216,15 @@ impl Application {
                 let best_config = match find_best_input_stream_config(&device) {
                     Ok(config) => config,
                     Err(e) => {
-                        error!("Failed to get config for device '{}': {}", device_name, e);
+                        error!("Failed to get config for device '{}': {}", device_id, e);
                         return Task::none();
                     }
                 };
 
                 // Only write config if everything succeeded
                 self.write_config(|config| {
-                    config.audio.input_device.device_name = device_name.clone();
-                    config.audio.input_device.sample_rate = best_config.0.0;
+                    config.audio.input_device.device_id = device_id.clone();
+                    config.audio.input_device.sample_rate = best_config.0;
                     config.audio.input_device.sample_format = best_config.1.to_string();
                     config.audio.input_device.channels = best_config.2;
                 });
@@ -238,19 +238,19 @@ impl Application {
 
                 Task::none()
             },
-            Message::SettingsPage(SettingsPageMessage::SelectOutputDevice(device_name)) => {
-                info!("Selected output device: {}", device_name);
+            Message::SettingsPage(SettingsPageMessage::SelectOutputDevice(device_id)) => {
+                info!("Selected output device: {}", device_id);
 
                 // Try to find device by name
-                let device = match find_output_device_by_name(device_name.clone()) {
+                let device = match find_output_device_by_id(device_id.clone()) {
                     Ok(Some(dev)) => dev,
                     Ok(None) => {
                         // TODO: refresh device list message
-                        error!("Device '{}' not found", device_name);
+                        error!("Device '{}' not found", device_id);
                         return Task::none();
                     }
                     Err(e) => {
-                        error!("Failed to find device '{}': {}", device_name, e);
+                        error!("Failed to find device '{}': {}", device_id, e);
                         return Task::none();
                     }
                 };
@@ -259,15 +259,15 @@ impl Application {
                 let best_config = match find_best_output_stream_config(&device) {
                     Ok(config) => config,
                     Err(e) => {
-                        error!("Failed to get config for device '{}': {}", device_name, e);
+                        error!("Failed to get config for device '{}': {}", device_id, e);
                         return Task::none();
                     }
                 };
 
                 // Only write config if everything succeeded
                 self.write_config(|config| {
-                    config.audio.output_device.device_name = device_name.clone();
-                    config.audio.output_device.sample_rate = best_config.0.0;
+                    config.audio.output_device.device_id = device_id.clone();
+                    config.audio.output_device.sample_rate = best_config.0;
                     config.audio.output_device.sample_format = best_config.1.to_string();
                     config.audio.output_device.channels = best_config.2;
                 });

@@ -21,7 +21,7 @@ chrono = { version = "0.4.42", features = ["clock"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 arc-swap = "1.8.0"
-cpal = "0.16"
+cpal = "0.17.0"
 hound = "3.5.1"
 rubato = "0.16.2"
 serde = { version = "1.0.228", features = ["derive"] }

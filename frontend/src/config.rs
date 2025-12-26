@@ -25,7 +25,7 @@ pub struct AudioConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AudioDevice {
-    pub device_name: String,
+    pub device_id: String,
     pub sample_rate: u32,
     pub sample_format: String,
     pub channels: u16,
@@ -53,15 +53,15 @@ impl Default for AppConfig {
             },
             audio: AudioConfig {
                 input_device: AudioDevice {
-                    device_name: input_device.name().expect("failed to get input device name").to_string(),
-                    sample_rate: input_stream_config.0.0,
+                    device_id: input_device.id().expect("failed to get input device id").to_string(),
+                    sample_rate: input_stream_config.0,
                     sample_format: input_stream_config.1.to_string(),
                     channels: input_stream_config.2
                 },
                 input_sensitivity: 30,
                 output_device: AudioDevice {
-                    device_name: output_device.name().expect("failed to get input device name").to_string(),
-                    sample_rate: output_stream_config.0.0,
+                    device_id: output_device.id().expect("failed to get input device id").to_string(),
+                    sample_rate: output_stream_config.0,
                     sample_format: output_stream_config.1.to_string(),
                     channels: output_stream_config.2
                 },

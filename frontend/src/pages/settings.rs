@@ -27,16 +27,16 @@ pub struct SettingsPage {
     radio_hover_indexes: HashMap<String, usize>,
 
     // Input
-    selected_input_device_name: String,
+    selected_input_device_id: String,
     input_sensitivity: u8,
     input_volume: u8,
-    input_device_names: Vec<String>,
+    input_devices: HashMap<String, String>,
     input_stream: Option<Stream>,
     voice_level: f32,
 
     // Output
-    selected_output_device_name: String,
-    output_device_names: Vec<String>,
+    selected_output_device_id: String,
+    output_devices: HashMap<String, String>,
     output_volume: u8
 }
 
@@ -66,27 +66,27 @@ impl SettingsPage {
     pub fn new(config: Arc<ArcSwap<AppConfig>>) -> Self {
         let audio_config = config.load().audio.clone();
 
-        let input_device_names = list_input_devices().unwrap_or_else(|e| {
+        let input_devices = list_input_devices().unwrap_or_else(|e| {
             error!("Failed to list input devices: {}", e);
-            vec!["No devices available".to_string()]
+            HashMap::new()
         });
 
         // Get available output devices
-        let output_device_names = list_output_devices().unwrap_or_else(|e| {
+        let output_devices = list_output_devices().unwrap_or_else(|e| {
             error!("Failed to list output devices: {}", e);
-            vec!["No devices available".to_string()]
+            HashMap::new()
         });
 
         Self {
             app_config: config.clone(),
             radio_hover_indexes: HashMap::new(),
-            selected_input_device_name: audio_config.input_device.device_name.clone(),
+            selected_input_device_id: audio_config.input_device.device_id.clone(),
             input_sensitivity: audio_config.input_sensitivity,
-            input_device_names,
+            input_devices,
             input_stream: None,
             voice_level: 0.0,
-            selected_output_device_name: audio_config.output_device.device_name.clone(),
-            output_device_names,
+            selected_output_device_id: audio_config.output_device.device_id.clone(),
+            output_devices,
             input_volume: 100,
             output_volume: 100,
         }
@@ -140,15 +140,16 @@ impl SettingsPage {
         }
     }
 
-    fn input_radio<'a, T>(
+    fn input_radio<'a, K, V>(
         &self,
-        values: &'a [T],
-        selected_value: T,
+        values: &'a HashMap<K, V>,
+        selected_value: K,
         group_name: &'a str,
-        on_select: fn(&T) -> SettingsPageMessage,
+        on_select: fn(&K) -> SettingsPageMessage,
     ) -> iced::widget::Column<'a, Message, Theme, Renderer>
     where
-        T: std::fmt::Display + 'a + std::cmp::PartialEq,
+        K: std::fmt::Display + 'a + std::cmp::PartialEq,
+        V: std::fmt::Display + 'a + std::cmp::PartialEq,
     {
         // Define styling functions
         let top_style = |_theme: &Theme| Style {
@@ -248,7 +249,7 @@ impl SettingsPage {
         // Build column with radio options
         let mut column = column![].spacing(0);
 
-        for (index, value) in values.iter().enumerate() {
+        for (index, (key, value)) in values.iter().enumerate() {
             // Determine style based on position
             let container_style = if index == 0 {
                 top_style
@@ -259,7 +260,7 @@ impl SettingsPage {
             };
 
             // Create circle
-            let circle = make_circle(index, value == &selected_value);
+            let circle = make_circle(index, key == &selected_value);
 
             // Create content row
             let content = row!(
@@ -279,7 +280,7 @@ impl SettingsPage {
                         .width(Length::Fill)
                         .height(52),
                 )
-                .on_press(on_select(value).into())
+                .on_press(on_select(key).into())
                 .style(|_theme: &Theme, _status: Status| button::Style {
                     text_color: text_primary(),
                     ..button::Style::default()
@@ -329,8 +330,8 @@ impl SettingsPage {
         .height(25);
 
         let input_device_select = self.input_radio(
-            &self.input_device_names,
-            self.selected_input_device_name.clone(),
+            &self.input_devices,
+            self.selected_input_device_id.clone(),
             "input_device",
             |v| SettingsPageMessage::SelectInputDevice(v.clone()),
         );
@@ -342,8 +343,8 @@ impl SettingsPage {
         .spacing(12);
 
         let output_device_select = self.input_radio(
-            &self.output_device_names,
-            self.selected_output_device_name.clone(),
+            &self.output_devices,
+            self.selected_output_device_id.clone(),
             "output_device",
             |v| SettingsPageMessage::SelectOutputDevice(v.clone()),
         );
@@ -484,15 +485,15 @@ impl Page for SettingsPage {
             Message::SettingsPage(settings_message) => {
                 match settings_message {
                     // Handle settings messages here
-                    SettingsPageMessage::SelectInputDevice(name) => {
-                        self.selected_input_device_name = name;
+                    SettingsPageMessage::SelectInputDevice(device_id) => {
+                        self.selected_input_device_id = device_id;
 
                         // Recreate input stream with new device
                         self.stop_input_stream();
                         return self.start_input_stream();
                     }
-                    SettingsPageMessage::SelectOutputDevice(name) => {
-                        self.selected_output_device_name = name;
+                    SettingsPageMessage::SelectOutputDevice(device_id) => {
+                        self.selected_output_device_id = device_id;
                     }
                     SettingsPageMessage::RadioHoverEnter(group, index) => {
                         self.radio_hover_indexes.insert(group, index);
