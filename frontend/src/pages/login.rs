@@ -8,8 +8,8 @@ use iced::font::{Family, Weight};
 use iced::widget::container::Style;
 use iced::widget::{container, space, stack, text, text_input};
 use iced::{border, Background, Border, Color, Element, Font, Length, Padding, Task};
-use std::sync::{Arc, RwLock};
-use tracing::{debug};
+use std::sync::Arc;
+use arc_swap::ArcSwap;
 use crate::config::AppConfig;
 
 #[derive(Default)]
@@ -34,8 +34,8 @@ impl Into<Message> for LoginPageMessage {
 }
 
 impl LoginPage {
-    pub fn new(config: Arc<RwLock<AppConfig>>) -> Self {
-        let config = config.read().unwrap();
+    pub fn new(config: Arc<ArcSwap<AppConfig>>) -> Self {
+        let config = config.load();
 
         let mut page = Self {
             voice_url: config.server.address.clone(),

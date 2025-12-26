@@ -14,6 +14,7 @@ use iced::widget::{button, column, container, mouse_area, progress_bar, row, rul
 use iced::{border, Alignment, Background, Border, Color, Element, Font, Length, Padding, Renderer, Task, Theme};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use arc_swap::ArcSwap;
 use iced::widget::scrollable::{Direction, Scrollbar, Scroller};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -21,7 +22,7 @@ use tracing::error;
 use crate::config::AppConfig;
 
 pub struct SettingsPage {
-    app_config: Arc<RwLock<AppConfig>>,
+    app_config: Arc<ArcSwap<AppConfig>>,
     // Add settings state fields here as needed
     radio_hover_indexes: HashMap<String, usize>,
 
@@ -62,8 +63,8 @@ impl Into<Message> for SettingsPageMessage {
 }
 
 impl SettingsPage {
-    pub fn new(config: Arc<RwLock<AppConfig>>) -> Self {
-        let audio_config = config.read().unwrap().audio.clone();
+    pub fn new(config: Arc<ArcSwap<AppConfig>>) -> Self {
+        let audio_config = config.load().audio.clone();
 
         let input_device_names = list_input_devices().unwrap_or_else(|e| {
             error!("Failed to list input devices: {}", e);
@@ -97,7 +98,7 @@ impl SettingsPage {
         // Create new channel for samples
         let (samples_tx, samples_rx) = mpsc::unbounded_channel();
 
-        let config = self.app_config.read().unwrap().audio.clone();
+        let config = self.app_config.load().audio.clone();
 
         // Create the audio input stream
         match create_input_stream(config.input_device) {

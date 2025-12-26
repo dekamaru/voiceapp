@@ -1,6 +1,7 @@
 use cpal::Stream;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use arc_swap::ArcSwap;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 use voiceapp_sdk::Client;
@@ -13,7 +14,7 @@ use crate::config::AppConfig;
 
 /// Audio manager that handles recording and playback lifecycle
 pub struct AudioManager {
-    app_config: Arc<RwLock<AppConfig>>,
+    app_config: Arc<ArcSwap<AppConfig>>,
     voice_client: Arc<Client>,
     input_stream: Option<Stream>,
     input_receiver_task: Option<JoinHandle<()>>,
@@ -25,7 +26,7 @@ pub struct AudioManager {
 
 impl AudioManager {
     /// Create a new AudioManager with UDP send channel and decoder manager
-    pub fn new(app_config: Arc<RwLock<AppConfig>>, voice_client: Arc<Client>) -> Self {
+    pub fn new(app_config: Arc<ArcSwap<AppConfig>>, voice_client: Arc<Client>) -> Self {
         Self {
             app_config,
             voice_client,
@@ -42,7 +43,7 @@ impl AudioManager {
     pub fn start_recording(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting audio recording");
 
-        let config = self.app_config.read().unwrap();
+        let config = self.app_config.load();
 
         // Create the input stream and get actual sample rate
         let (stream, mut receiver) = create_input_stream(config.audio.input_device.clone())?;
@@ -90,7 +91,7 @@ impl AudioManager {
     pub fn create_output_stream_for_user(&mut self, user_id: u64) -> Result<(), Box<dyn std::error::Error>> {
         info!("Creating output stream for user {}", user_id);
 
-        let config = self.app_config.read().unwrap();
+        let config = self.app_config.load();
         let decoder = self.voice_client.get_voice_output_for(user_id, config.audio.output_device.sample_rate.clone() as usize)?;
 
         // Wrap decoder in AudioSource trait adapter
@@ -127,7 +128,7 @@ impl AudioManager {
     /// Initialize (or reinitialize) notification player with current output device sample rate
     /// Can be called multiple times to recreate the player when output device changes
     pub fn init_notification_player(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let config = self.app_config.read().unwrap();
+        let config = self.app_config.load();
         let sample_rate = config.audio.output_device.sample_rate;
 
         info!("Initializing notification player with sample rate {} Hz", sample_rate);

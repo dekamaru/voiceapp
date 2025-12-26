@@ -4,7 +4,8 @@ use crate::pages::login::{LoginPage, LoginPageMessage};
 use crate::pages::room::{RoomPage, RoomPageMessage};
 use crate::pages::settings::{SettingsPage, SettingsPageMessage};
 use iced::Task;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use arc_swap::ArcSwap;
 use tracing::{error, info};
 use voiceapp_sdk::{Client, ClientEvent};
 use crate::config::AppConfig;
@@ -68,7 +69,7 @@ pub struct Application {
     current_page: PageType,
     voice_client: Arc<Client>,
     audio_manager: AudioManager,
-    config: Arc<RwLock<AppConfig>>,
+    config: Arc<ArcSwap<AppConfig>>,
 }
 
 impl Application {
@@ -92,7 +93,8 @@ impl Application {
             Task::none()
         };
 
-        let config = Arc::new(RwLock::new(config));
+        let config = Arc::new(ArcSwap::from_pointee(config));
+
         let mut audio_manager = AudioManager::new(config.clone(), voice_client.clone());
         if let Err(e) = audio_manager.init_notification_player() {
             error!("failed to initialize notification player: {}", e);
@@ -371,9 +373,14 @@ impl Application {
     where
         F: FnOnce(&mut AppConfig),
     {
-        let mut config = self.config.write().expect("cannot obtain config write lock");
-        updater(&mut config);
-        match config.save() {
+        let current_config = self.config.load_full();
+        let mut new_config = (*current_config).clone();
+        updater(&mut new_config);
+
+        let new_arc = Arc::new(new_config);
+        self.config.store(new_arc.clone());
+
+        match new_arc.save() {
             Ok(_) => {}
             Err(e) => {
                 error!("failed to save configuration: {}", e);
