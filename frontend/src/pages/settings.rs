@@ -13,7 +13,7 @@ use iced::widget::slider::{Handle, HandleShape, Rail};
 use iced::widget::{button, column, container, mouse_area, progress_bar, row, rule, scrollable, slider, stack, text, Scrollable};
 use iced::{border, Alignment, Background, Border, Color, Element, Font, Length, Padding, Renderer, Task, Theme};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 use arc_swap::ArcSwap;
 use iced::widget::scrollable::{Direction, Scrollbar, Scroller};
 use tokio::sync::mpsc;
@@ -87,8 +87,8 @@ impl SettingsPage {
             voice_level: 0.0,
             selected_output_device_id: audio_config.output_device.device_id.clone(),
             output_devices,
-            input_volume: 100,
-            output_volume: 100,
+            input_volume: audio_config.input_device.volume,
+            output_volume: audio_config.output_device.volume,
         }
     }
 

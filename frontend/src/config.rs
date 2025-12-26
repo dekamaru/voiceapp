@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -20,7 +21,8 @@ pub struct ServerConfig {
 pub struct AudioConfig {
     pub input_device: AudioDevice,
     pub output_device: AudioDevice,
-    pub input_sensitivity: u8
+    pub input_sensitivity: u8,
+    pub users_volumes: HashMap<u64, u8>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -29,6 +31,7 @@ pub struct AudioDevice {
     pub sample_rate: u32,
     pub sample_format: String,
     pub channels: u16,
+    pub volume: u8,
 }
 
 impl ServerConfig {
@@ -56,15 +59,18 @@ impl Default for AppConfig {
                     device_id: input_device.id().expect("failed to get input device id").to_string(),
                     sample_rate: input_stream_config.0,
                     sample_format: input_stream_config.1.to_string(),
-                    channels: input_stream_config.2
+                    channels: input_stream_config.2,
+                    volume: 100,
                 },
                 input_sensitivity: 30,
                 output_device: AudioDevice {
                     device_id: output_device.id().expect("failed to get input device id").to_string(),
                     sample_rate: output_stream_config.0,
                     sample_format: output_stream_config.1.to_string(),
-                    channels: output_stream_config.2
+                    channels: output_stream_config.2,
+                    volume: 70,
                 },
+                users_volumes: HashMap::new()
             }
         }
     }

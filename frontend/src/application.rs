@@ -108,7 +108,7 @@ impl Application {
 
         let mut pages = HashMap::<PageType, Box<dyn Page>>::from([
             (PageType::Login, Box::new(LoginPage::new(config.clone())) as Box<dyn Page>),
-            (PageType::Room, Box::new(RoomPage::new()) as Box<dyn Page>),
+            (PageType::Room, Box::new(RoomPage::new(config.clone())) as Box<dyn Page>),
             (PageType::Settings, Box::new(SettingsPage::new(config.clone())) as Box<dyn Page>)
         ]);
 
@@ -294,6 +294,22 @@ impl Application {
 
                 Task::none()
             },
+            Message::SettingsPage(SettingsPageMessage::InputVolumeChanged(input_volume)) => {
+                self.write_config(|config| { config.audio.input_device.volume = *input_volume });
+                Task::none()
+            }
+            Message::SettingsPage(SettingsPageMessage::OutputVolumeChanged(output_volume)) => {
+                self.write_config(|config| { config.audio.output_device.volume = *output_volume });
+                Task::none()
+            }
+            Message::SettingsPage(SettingsPageMessage::InputSensitivityChanged(input_sensitivity)) => {
+                self.write_config(|config| { config.audio.input_sensitivity = *input_sensitivity });
+                Task::none()
+            }
+            Message::RoomPage(RoomPageMessage::UserVolumeChanged(user_id, volume)) => {
+                self.write_config(|config| { config.audio.users_volumes.insert(*user_id, *volume); });
+                Task::none()
+            }
             Message::MuteInput(muted) => {
                 if *muted {
                     self.audio_manager.mute_input();

@@ -12,6 +12,8 @@ use iced::widget::scrollable::{Direction, Rail, Scrollbar, Scroller};
 use iced::widget::{button, column, container, float, hover, mouse_area, row, rule, scrollable, slider, space, stack, text, Container, Id, Scrollable};
 use iced::{border, Alignment, Background, Border, Color, Element, Font, Length, Padding, Task, Theme};
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+use arc_swap::ArcSwap;
 use iced::font::{Family, Weight};
 use iced::mouse::Interaction;
 use iced::widget::slider::{Handle, HandleShape};
@@ -19,6 +21,7 @@ use iced_aw::{ContextMenu, DropDown};
 use tracing::{debug, warn};
 use tracing::log::info;
 use voiceapp_sdk::{ParticipantInfo, ClientEvent};
+use crate::config::AppConfig;
 use crate::pages::settings::SettingsPageMessage;
 
 #[derive(Clone, Debug)]
@@ -76,14 +79,16 @@ impl Into<Message> for RoomPageMessage {
 }
 
 impl RoomPage {
-    pub fn new() -> Self {
+    pub fn new(config: Arc<ArcSwap<AppConfig>>) -> Self {
+        let config = config.load();
+
         Self {
             user_id: 0,
             muted: false,
             chat_message: String::new(),
             participants: HashMap::new(),
             chat_history: BTreeMap::new(),
-            volume_per_user: HashMap::new(),
+            volume_per_user: config.audio.users_volumes.clone(),
             selected_user_settings: None,
         }
     }
@@ -431,7 +436,7 @@ impl RoomPage {
             let user_volume_value = if let Some(user_volume) = self.volume_per_user.get(&participant.user_id) {
                 user_volume
             } else {
-                &0
+                &100
             };
 
             let user_volume_slider = slider(0..=100, *user_volume_value, |v| {
