@@ -4,18 +4,22 @@ use crate::icons::Icons;
 use crate::widgets::Widgets;
 use chrono::{DateTime, Local, Utc};
 use iced::alignment::{Horizontal, Vertical};
-use iced::border::Radius;
+use iced::border::{rounded, Radius};
 use iced::widget::button::Status;
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
 use iced::widget::scrollable::{Direction, Rail, Scrollbar, Scroller};
-use iced::widget::{
-    button, column, container, row, rule, scrollable, space, text, Container, Id, Scrollable,
-};
-use iced::{border, Alignment, Background, Border, Color, Element, Length, Padding, Task, Theme};
+use iced::widget::{button, column, container, float, hover, mouse_area, row, rule, scrollable, slider, space, stack, text, Container, Id, Scrollable};
+use iced::{border, Alignment, Background, Border, Color, Element, Font, Length, Padding, Task, Theme};
 use std::collections::{BTreeMap, HashMap};
+use iced::font::{Family, Weight};
+use iced::mouse::Interaction;
+use iced::widget::slider::{Handle, HandleShape};
+use iced_aw::{ContextMenu, DropDown};
 use tracing::{debug, warn};
+use tracing::log::info;
 use voiceapp_sdk::{ParticipantInfo, ClientEvent};
+use crate::pages::settings::SettingsPageMessage;
 
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
@@ -50,6 +54,8 @@ pub struct RoomPage {
     chat_message: String,
     participants: HashMap<u64, ParticipantInfo>,
     chat_history: BTreeMap<u64, ChatMessage>,
+    volume_per_user: HashMap<u64, u8>,
+    selected_user_settings: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +64,9 @@ pub enum RoomPageMessage {
     JoinLeaveToggle,
     ChatMessageChanged(String),
     ChatMessageSubmitted,
+    UserClicked(u64),
+    UserSettingsDismissed,
+    UserVolumeChanged(u64, u8)
 }
 
 impl Into<Message> for RoomPageMessage {
@@ -74,10 +83,12 @@ impl RoomPage {
             chat_message: String::new(),
             participants: HashMap::new(),
             chat_history: BTreeMap::new(),
+            volume_per_user: HashMap::new(),
+            selected_user_settings: None,
         }
     }
 
-    fn main_screen(&self) -> iced::widget::Container<'static, Message> {
+    fn main_screen<'a>(&self) -> iced::widget::Container<Message> {
         let rule_style = |_theme: &Theme| rule::Style {
             color: divider_bg(),
             radius: Radius::default(),
@@ -91,14 +102,8 @@ impl RoomPage {
             self.participants.values().filter(|i| !i.in_voice).collect();
 
         let mut sidebar_elements = Vec::new();
-        sidebar_elements.extend(Self::render_members_section(
-            "IN VOICE",
-            participants_in_voice,
-        ));
-        sidebar_elements.extend(Self::render_members_section(
-            "IN CHAT",
-            participants_in_chat,
-        ));
+        sidebar_elements.extend(self.render_members_section("IN VOICE", participants_in_voice));
+        sidebar_elements.extend(self.render_members_section("IN CHAT", participants_in_chat));
 
         let mut sidebar_column = iced::widget::Column::new();
         for element in sidebar_elements {
@@ -348,11 +353,11 @@ impl RoomPage {
             .on_press(RoomPageMessage::MuteToggle.into())
     }
 
-    fn member(
+    fn member<'a>(
         username: &str,
         in_voice: bool,
         muted: bool,
-    ) -> Container<'static, Message> {
+    ) -> Container<'a, Message> {
         let icon = if in_voice {
             if muted {
                 Icons::microphone_slash_fill(color_error(), 16)
@@ -383,15 +388,22 @@ impl RoomPage {
         .width(Length::Fill)
     }
 
-    fn render_members_section(
+    fn render_members_section<'a>(
+        &self,
         title: &str,
-        participants: Vec<&ParticipantInfo>,
-    ) -> Vec<Element<'static, Message>> {
+        participants: Vec<&'a ParticipantInfo>,
+    ) -> Vec<Element<'a, Message>> {
         if participants.is_empty() {
             return Vec::new();
         }
 
-        let mut elements: Vec<Element<'static, Message>> = Vec::new();
+        let bold = Font {
+            family: Family::Name("Rubik"),
+            weight: Weight::Semibold,
+            ..Default::default()
+        };
+
+        let mut elements: Vec<Element<'a, Message>> = Vec::new();
 
         // Add title
         let title_owned = title.to_string();
@@ -410,11 +422,70 @@ impl RoomPage {
         // Add members
         let mut members_column = iced::widget::Column::new();
         for participant in participants {
-            members_column = members_column.push(Self::member(
+            let member_container = mouse_area(Self::member(
                 &participant.username,
                 participant.in_voice,
                 participant.is_muted,
-            ));
+            )).on_right_press(RoomPageMessage::UserClicked(participant.user_id).into()).interaction(Interaction::Pointer);
+
+            let user_volume_value = if let Some(user_volume) = self.volume_per_user.get(&participant.user_id) {
+                user_volume
+            } else {
+                &0
+            };
+
+            let user_volume_slider = slider(0..=100, *user_volume_value, |v| {
+                RoomPageMessage::UserVolumeChanged(participant.user_id, v).into()
+            })
+                .style(|_theme: &Theme, _status: slider::Status| slider::Style {
+                    rail: iced::widget::slider::Rail {
+                        backgrounds: (
+                            Background::Color(text_primary()),
+                            Background::Color(DARK_CONTAINER_BACKGROUND),
+                        ),
+                        width: 4.0,
+                        border: rounded(2),
+                    },
+                    handle: Handle {
+                        shape: HandleShape::Circle { radius: 8.0 },
+                        background: Background::Color(text_primary()),
+                        border_width: 0.0,
+                        border_color: Color::TRANSPARENT,
+                    },
+                });
+
+            let member_settings = container(
+                container(
+                    column!(
+                        text("User volume").font(bold).size(12),
+                        row!(user_volume_slider, text(user_volume_value).font(bold).size(12)).spacing(4)
+                    ).spacing(8)
+                )
+                    .padding(12)
+                    .style(|_theme| {
+                        Style {
+                            background: Some(Background::Color(DARK_CONTAINER_BACKGROUND)),
+                            border: border::rounded(14),
+                            ..Style::default()
+                        }
+                    })
+                    .width(Length::Fill)
+            )
+                .width(214)
+                .padding(Padding { left: 16.0, right: 16.0, ..Padding::default() });
+
+            let expand_dropdown = if let Some(user_id) = self.selected_user_settings {
+                user_id == participant.user_id
+            } else {
+                false
+            };
+
+            let dropdown = DropDown::new(member_container, member_settings, expand_dropdown)
+                .on_dismiss(RoomPageMessage::UserSettingsDismissed.into())
+                .width(Length::Fill)
+                .offset(-5.0);
+
+            members_column = members_column.push(dropdown);
         }
 
         elements.push(
@@ -472,6 +543,15 @@ impl Page for RoomPage {
                             VoiceCommand::SendChatMessage(message),
                         ));
                     }
+                },
+                RoomPageMessage::UserClicked(user_id) => {
+                    self.selected_user_settings = Some(user_id);
+                }
+                RoomPageMessage::UserSettingsDismissed => {
+                    self.selected_user_settings = None;
+                }
+                RoomPageMessage::UserVolumeChanged(user_id, volume) => {
+                    self.volume_per_user.insert(user_id, volume);
                 }
             },
             Message::VoiceCommandResult(result) => match result {

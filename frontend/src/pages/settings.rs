@@ -1,6 +1,6 @@
 use crate::application::{Message, Page, PageType};
 use crate::audio::{create_input_stream, list_input_devices, list_output_devices};
-use crate::colors::{text_primary, DARK_BACKGROUND, DARK_CONTAINER_BACKGROUND};
+use crate::colors::{text_chat_header, text_primary, DARK_BACKGROUND, DARK_CONTAINER_BACKGROUND};
 use crate::icons::Icons;
 use crate::widgets::Widgets;
 use cpal::Stream;
@@ -10,13 +10,11 @@ use iced::widget::button::Status;
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
 use iced::widget::slider::{Handle, HandleShape, Rail};
-use iced::widget::{button, column, container, mouse_area, progress_bar, row, rule, slider, stack, text};
-use iced::{
-    Alignment, Background, Border, Color, Element, Font, Length, Padding, Renderer, Task,
-    Theme,
-};
+use iced::widget::{button, column, container, mouse_area, progress_bar, row, rule, scrollable, slider, stack, text, Scrollable};
+use iced::{border, Alignment, Background, Border, Color, Element, Font, Length, Padding, Renderer, Task, Theme};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use iced::widget::scrollable::{Direction, Scrollbar, Scroller};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::error;
@@ -30,6 +28,7 @@ pub struct SettingsPage {
     // Input
     selected_input_device_name: String,
     input_sensitivity: u8,
+    input_volume: u8,
     input_device_names: Vec<String>,
     input_stream: Option<Stream>,
     voice_level: f32,
@@ -37,6 +36,7 @@ pub struct SettingsPage {
     // Output
     selected_output_device_name: String,
     output_device_names: Vec<String>,
+    output_volume: u8
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +45,8 @@ pub enum SettingsPageMessage {
     SelectOutputDevice(String),
 
     InputSensitivityChanged(u8),
+    InputVolumeChanged(u8),
+    OutputVolumeChanged(u8),
 
     RadioHoverEnter(String, usize),
     RadioHoverLeave(String, usize),
@@ -84,6 +86,8 @@ impl SettingsPage {
             voice_level: 0.0,
             selected_output_device_name: audio_config.output_device.device_name.clone(),
             output_device_names,
+            input_volume: 100,
+            output_volume: 100,
         }
     }
 
@@ -383,14 +387,90 @@ impl SettingsPage {
         )
         .spacing(12);
 
-        let settings_container = column!(input_device, input_device_sensitivity, output_device).spacing(24);
-
-        container(column!(header, settings_container).spacing(32)).padding(Padding {
-            top: 32.0,
-            right: 24.0,
-            left: 24.0,
-            bottom: 32.0,
+        let input_volume_slider = slider(0..=100, self.input_volume, |v| {
+            SettingsPageMessage::InputVolumeChanged(v).into()
         })
+            .style(|_theme: &Theme, _status: slider::Status| slider::Style {
+                rail: Rail {
+                    backgrounds: (
+                        Background::Color(text_primary()),
+                        Background::Color(DARK_CONTAINER_BACKGROUND),
+                    ),
+                    width: 4.0,
+                    border: rounded(2),
+                },
+                handle: Handle {
+                    shape: HandleShape::Circle { radius: 8.0 },
+                    background: Background::Color(text_primary()),
+                    border_width: 0.0,
+                    border_color: Color::TRANSPARENT,
+                },
+            });
+
+        let output_volume_slider = slider(0..=100, self.output_volume, |v| {
+            SettingsPageMessage::OutputVolumeChanged(v).into()
+        })
+            .style(|_theme: &Theme, _status: slider::Status| slider::Style {
+                rail: Rail {
+                    backgrounds: (
+                        Background::Color(text_primary()),
+                        Background::Color(DARK_CONTAINER_BACKGROUND),
+                    ),
+                    width: 4.0,
+                    border: rounded(2),
+                },
+                handle: Handle {
+                    shape: HandleShape::Circle { radius: 8.0 },
+                    background: Background::Color(text_primary()),
+                    border_width: 0.0,
+                    border_color: Color::TRANSPARENT,
+                },
+            });
+
+        let input_volume = column!(
+            text("Input volume").font(bold).size(12),
+            row!(input_volume_slider, text(self.input_volume).font(bold).size(12)).spacing(12),
+        )
+            .spacing(12);
+
+        let output_volume = column!(
+            text("Output volume").font(bold).size(12),
+            row!(output_volume_slider, text(self.output_volume).font(bold).size(12)).spacing(12),
+        )
+            .spacing(12);
+
+        let settings_container = column!(input_device, input_volume, input_device_sensitivity, output_device, output_volume).spacing(24);
+
+        container(
+            Scrollable::with_direction(
+                container(column!(header, settings_container).spacing(32)).padding(Padding {
+                    right: 24.0,
+                    left: 24.0,
+                    ..Padding::default()
+                }),
+                Direction::Vertical(Scrollbar::new().width(4).margin(9).scroller_width(2))
+            ).style(|theme, status| {
+                let rail = iced::widget::scrollable::Rail {
+                    background: Some(Background::Color(Color::TRANSPARENT)),
+                    border: Border::default(),
+                    scroller: Scroller {
+                        background: Background::Color(text_chat_header()),
+                        border: border::rounded(12),
+                    },
+                };
+
+                scrollable::Style {
+                    container: Style {
+                        background: Some(Background::Color(Color::TRANSPARENT)),
+                        ..Style::default()
+                    },
+                    vertical_rail: rail,
+                    horizontal_rail: rail,
+                    gap: None,
+                    ..scrollable::default(theme, status)
+                }
+            })
+        ).padding(Padding { top: 32.0, bottom: 32.0, ..Padding::default() })
     }
 }
 
@@ -425,6 +505,12 @@ impl Page for SettingsPage {
                     }
                     SettingsPageMessage::InputSensitivityChanged(sensitivity) => {
                         self.input_sensitivity = sensitivity;
+                    }
+                    SettingsPageMessage::InputVolumeChanged(volume) => {
+                        self.input_volume = volume;
+                    }
+                    SettingsPageMessage::OutputVolumeChanged(volume) => {
+                        self.output_volume = volume;
                     }
                     SettingsPageMessage::InputStreamCreated(result) => match result {
                         Ok(()) => {
