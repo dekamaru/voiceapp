@@ -68,6 +68,28 @@ pub fn stereo_to_mono(stereo: &[f32], channels: u16) -> Vec<f32> {
     mono
 }
 
+pub fn calculate_dbfs(samples: Vec<f32>) -> f32 {
+    let sum_squares: f32 = samples.iter().map(|&s| s * s).sum();
+    let rms = (sum_squares / samples.len() as f32).sqrt();
+
+    // Convert to dBFS: 20 * log10(rms)
+    let db_fs = if rms > 0.0 {
+        20.0 * rms.log10()
+    } else {
+        -100.0
+    };
+
+    const NOISE_GATE_DB: f32 = -70.0;
+    const MAX_DB: f32 = 0.0;
+
+    if db_fs < NOISE_GATE_DB {
+        0.0
+    } else {
+        // Map from NOISE_GATE_DB to 0 dBFS as 0.0 to 1.0
+        ((db_fs - NOISE_GATE_DB) / (MAX_DB - NOISE_GATE_DB)).clamp(0.0, 1.0)
+    }
+}
+
 pub fn adjust_volume(buffer: &mut [f32], volume: f32) {
     for sample in buffer.iter_mut() {
         *sample *= volume;

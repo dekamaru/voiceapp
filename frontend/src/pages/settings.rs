@@ -1,5 +1,5 @@
 use crate::application::{Message, Page, PageType};
-use crate::audio::{create_input_stream, list_input_devices, list_output_devices};
+use crate::audio::{adjust_volume, calculate_dbfs, create_input_stream, list_input_devices, list_output_devices};
 use crate::colors::{text_chat_header, text_primary, DARK_BACKGROUND, DARK_CONTAINER_BACKGROUND};
 use crate::icons::Icons;
 use crate::widgets::Widgets;
@@ -529,28 +529,10 @@ impl Page for SettingsPage {
                     return Task::done(Message::SwitchPage(PageType::Room))
                 }
             }
-            Message::VoiceInputSamplesReceived(samples) => {
-                // Calculate RMS (root mean square) of the samples
+            Message::VoiceInputSamplesReceived(mut samples) => {
+                adjust_volume(samples.as_mut(), self.input_volume as f32 / 100.0);
                 if !samples.is_empty() {
-                    let sum_squares: f32 = samples.iter().map(|&s| s * s).sum();
-                    let rms = (sum_squares / samples.len() as f32).sqrt();
-
-                    // Convert to dBFS: 20 * log10(rms)
-                    let db_fs = if rms > 0.0 {
-                        20.0 * rms.log10()
-                    } else {
-                        -100.0
-                    };
-
-                    const NOISE_GATE_DB: f32 = -70.0;
-                    const MAX_DB: f32 = 0.0;
-
-                    self.voice_level = if db_fs < NOISE_GATE_DB {
-                        0.0
-                    } else {
-                        // Map from NOISE_GATE_DB to 0 dBFS as 0.0 to 1.0
-                        ((db_fs - NOISE_GATE_DB) / (MAX_DB - NOISE_GATE_DB)).clamp(0.0, 1.0)
-                    };
+                    self.voice_level = calculate_dbfs(samples.to_vec());
                 }
             }
             _ => {}
