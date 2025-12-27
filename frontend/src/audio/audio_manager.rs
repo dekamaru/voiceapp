@@ -6,7 +6,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 use voiceapp_sdk::Client;
 
-use crate::audio::audio_source::VoiceDecoderSource;
+use crate::audio::audio_source::{VoiceDecoderSource, VolumeAdjustedSource};
 use crate::audio::input::create_input_stream;
 use crate::audio::notification_player::NotificationPlayer;
 use crate::audio::output::{create_output_stream};
@@ -108,7 +108,15 @@ impl AudioManager {
         let decoder = self.voice_client.get_voice_output_for(user_id, config.audio.output_device.sample_rate.clone() as usize)?;
 
         // Wrap decoder in AudioSource trait adapter
-        let audio_source = Arc::new(VoiceDecoderSource::new(decoder));
+        let decoder_source = Arc::new(VoiceDecoderSource::new(decoder));
+
+        // Wrap with volume adjustment that reads from config dynamically
+        let audio_source = Arc::new(VolumeAdjustedSource::new(
+            decoder_source,
+            Arc::clone(&self.app_config),
+            user_id
+        ));
+
         let output_handle = create_output_stream(config.audio.output_device.clone(), audio_source)?;
         info!("Created output stream for user {} at {} Hz", user_id, config.audio.output_device.sample_rate.clone());
 

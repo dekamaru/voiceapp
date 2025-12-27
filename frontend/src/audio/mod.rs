@@ -6,7 +6,7 @@ mod output;
 mod common;
 
 pub use audio_manager::AudioManager;
-pub use audio_source::{AudioSource, VoiceDecoderSource};
+pub use audio_source::{AudioSource, VoiceDecoderSource, VolumeAdjustedSource};
 pub use input::{*};
 pub use output::{*};
 pub use common::{*};

@@ -1,5 +1,8 @@
 use std::sync::Arc;
+use arc_swap::ArcSwap;
 use voiceapp_sdk::Decoder;
+use crate::audio::adjust_volume;
+use crate::config::AppConfig;
 
 /// Trait for audio sources that can provide audio samples
 /// This abstraction allows both VoiceDecoder and NotificationPlayer
@@ -24,5 +27,37 @@ impl VoiceDecoderSource {
 impl AudioSource for VoiceDecoderSource {
     fn get_audio(&self) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
         self.decoder.get_decoded_audio().map_err(|e| e.into())
+    }
+}
+
+/// Wrapper that applies dynamic per-user volume adjustment
+pub struct VolumeAdjustedSource {
+    inner: Arc<dyn AudioSource>,
+    app_config: Arc<ArcSwap<AppConfig>>,
+    user_id: u64,
+}
+
+impl VolumeAdjustedSource {
+    pub fn new(inner: Arc<dyn AudioSource>, app_config: Arc<ArcSwap<AppConfig>>, user_id: u64) -> Self {
+        Self {
+            inner,
+            app_config,
+            user_id,
+        }
+    }
+}
+
+impl AudioSource for VolumeAdjustedSource {
+    fn get_audio(&self) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+        let mut samples = self.inner.get_audio()?;
+        let config = self.app_config.load();
+        let user_volume = config.audio.users_volumes
+            .get(&self.user_id)
+            .copied()
+            .unwrap_or(100); // Default to 100% if not configured
+        
+        adjust_volume(&mut samples, user_volume as f32 / 100.0);
+
+        Ok(samples)
     }
 }
