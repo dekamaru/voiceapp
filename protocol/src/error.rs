@@ -2,6 +2,7 @@ use std::fmt;
 
 /// Protocol decoding errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProtocolError {
     PacketTooShort { expected: usize, got: usize },
     UnknownPacketId(u8),
@@ -12,17 +13,19 @@ pub enum ProtocolError {
 impl fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ProtocolError::PacketTooShort { expected, got } => {
-                write!(f, "packet too short: expected at least {} bytes, got {}", expected, got)
+            Self::PacketTooShort { expected, got } => {
+                write!(
+                    f,
+                    "packet too short: expected at least {expected} bytes, got {got}"
+                )
             }
-            ProtocolError::UnknownPacketId(id) => {
-                write!(f, "unknown packet id: 0x{:02x}", id)
-            }
-            ProtocolError::InvalidUtf8 => {
-                write!(f, "invalid UTF-8 encoding")
-            }
-            ProtocolError::IncompletePayload { expected, got } => {
-                write!(f, "incomplete payload: expected {} bytes, got {}", expected, got)
+            Self::UnknownPacketId(id) => write!(f, "unknown packet id: 0x{id:02x}"),
+            Self::InvalidUtf8 => write!(f, "invalid UTF-8 encoding"),
+            Self::IncompletePayload { expected, got } => {
+                write!(
+                    f,
+                    "incomplete payload: expected {expected} bytes, got {got}"
+                )
             }
         }
     }

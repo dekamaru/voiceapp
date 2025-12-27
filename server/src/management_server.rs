@@ -264,12 +264,7 @@ impl ManagementServer {
             let users_lock = self.users.read().await;
             users_lock
                 .values()
-                .map(|u| ParticipantInfo {
-                    user_id: u.id,
-                    username: u.username.clone(),
-                    in_voice: u.in_voice,
-                    is_muted: u.is_muted,
-                })
+                .map(|u| ParticipantInfo::new(u.id, u.username.clone(), u.in_voice, u.is_muted))
                 .collect::<Vec<_>>()
         };
 
@@ -285,12 +280,7 @@ impl ManagementServer {
 
         // Broadcast user joined server event to all other clients
         let joined_event = Packet::UserJoinedServer {
-            participant: ParticipantInfo {
-                user_id,
-                username: username_clone.clone(),
-                in_voice: false,
-                is_muted: false,
-            },
+            participant: ParticipantInfo::new(user_id, username_clone.clone(), false, false),
         };
         let broadcast_msg = BroadcastMessage {
             sender_addr: Some(peer_addr),

@@ -602,12 +602,7 @@ impl Page for RoomPage {
                     debug!("User {} joined server", username);
                     self.participants.insert(
                         user_id,
-                        ParticipantInfo {
-                            user_id,
-                            username,
-                            in_voice: false,
-                            is_muted: false,
-                        },
+                        ParticipantInfo::new(user_id, username, false, false),
                     );
                 }
                 ClientEvent::UserJoinedVoice { user_id } => {
