@@ -4,6 +4,7 @@ use std::io::Cursor;
 use std::time::Instant;
 use rubato::{FftFixedInOut, Resampler};
 use tracing::{error, info, warn};
+use crate::audio::adjust_volume;
 use crate::audio::audio_source::AudioSource;
 
 /// Stores a preloaded notification sound
@@ -170,11 +171,14 @@ impl NotificationPlayer {
 
     /// Play a notification sound (cancels any currently playing sound)
     /// If sound_id not found, logs warning and does nothing
-    pub fn play(&self, sound_id: &str) {
+    pub fn play(&self, sound_id: &str, volume: u8) {
         if let Some(sound) = self.sounds.get(sound_id) {
+            let mut samples = sound.samples.clone();
+            adjust_volume(&mut samples, volume as f32 / 100.0);
+
             let mut state = self.state.lock().unwrap();
             state.current = Some(CurrentNotification {
-                samples: sound.samples.clone(),
+                samples,
                 position: 0,
             });
         } else {

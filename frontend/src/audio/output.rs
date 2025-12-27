@@ -122,6 +122,11 @@ fn fill_output(buffer: &mut [f32], audio_source: &Arc<dyn AudioSource>, leftover
             break;
         }
 
+        // Copy samples from leftover to buffer
+        for i in 0..n {
+            buffer[idx + i] = leftover[i];
+        }
+
         leftover.drain(..n);
         idx += n;
     }

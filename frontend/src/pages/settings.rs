@@ -37,7 +37,8 @@ pub struct SettingsPage {
     // Output
     selected_output_device_id: String,
     output_devices: HashMap<String, String>,
-    output_volume: u8
+    output_volume: u8,
+    notification_volume: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +49,7 @@ pub enum SettingsPageMessage {
     InputSensitivityChanged(u8),
     InputVolumeChanged(u8),
     OutputVolumeChanged(u8),
+    NotificationVolumeChanged(u8),
 
     RadioHoverEnter(String, usize),
     RadioHoverLeave(String, usize),
@@ -89,6 +91,7 @@ impl SettingsPage {
             output_devices,
             input_volume: audio_config.input_device.volume,
             output_volume: audio_config.output_device.volume,
+            notification_volume: audio_config.notification_volume,
         }
     }
 
@@ -329,6 +332,23 @@ impl SettingsPage {
         .spacing(12)
         .height(25);
 
+        let slider_style = |_theme: &Theme, _status: slider::Status| slider::Style {
+            rail: Rail {
+                backgrounds: (
+                    Background::Color(text_primary()),
+                    Background::Color(DARK_CONTAINER_BACKGROUND),
+                ),
+                width: 4.0,
+                border: rounded(2),
+            },
+            handle: Handle {
+                shape: HandleShape::Circle { radius: 8.0 },
+                background: Background::Color(text_primary()),
+                border_width: 0.0,
+                border_color: Color::TRANSPARENT,
+            },
+        };
+
         let input_device_select = self.input_radio(
             &self.input_devices,
             self.selected_input_device_id.clone(),
@@ -365,8 +385,7 @@ impl SettingsPage {
 
         let sensitivity_slider = slider(0..=100, self.input_sensitivity, |v| {
             SettingsPageMessage::InputSensitivityChanged(v).into()
-        })
-        .style(|_theme: &Theme, _status: slider::Status| slider::Style {
+        }).style(|_theme: &Theme, _status: slider::Status| slider::Style {
             rail: Rail {
                 backgrounds: (
                     Background::Color(Color::from_rgb8(206, 157, 92)),
@@ -383,65 +402,46 @@ impl SettingsPage {
             },
         });
 
-        let input_device_sensitivity = column!(
-            text("Input sensitivity").font(bold).size(12),
-            stack!(sensitivity_slider, progress_bar)
-        )
-        .spacing(12);
-
         let input_volume_slider = slider(0..=100, self.input_volume, |v| {
             SettingsPageMessage::InputVolumeChanged(v).into()
-        })
-            .style(|_theme: &Theme, _status: slider::Status| slider::Style {
-                rail: Rail {
-                    backgrounds: (
-                        Background::Color(text_primary()),
-                        Background::Color(DARK_CONTAINER_BACKGROUND),
-                    ),
-                    width: 4.0,
-                    border: rounded(2),
-                },
-                handle: Handle {
-                    shape: HandleShape::Circle { radius: 8.0 },
-                    background: Background::Color(text_primary()),
-                    border_width: 0.0,
-                    border_color: Color::TRANSPARENT,
-                },
-            });
+        }).style(slider_style);
 
         let output_volume_slider = slider(0..=100, self.output_volume, |v| {
             SettingsPageMessage::OutputVolumeChanged(v).into()
-        })
-            .style(|_theme: &Theme, _status: slider::Status| slider::Style {
-                rail: Rail {
-                    backgrounds: (
-                        Background::Color(text_primary()),
-                        Background::Color(DARK_CONTAINER_BACKGROUND),
-                    ),
-                    width: 4.0,
-                    border: rounded(2),
-                },
-                handle: Handle {
-                    shape: HandleShape::Circle { radius: 8.0 },
-                    background: Background::Color(text_primary()),
-                    border_width: 0.0,
-                    border_color: Color::TRANSPARENT,
-                },
-            });
+        }).style(slider_style);
+
+        let notification_volume_slider = slider(0..=100, self.notification_volume, |v| {
+            SettingsPageMessage::NotificationVolumeChanged(v).into()
+        }).style(slider_style);
+
+        let input_device_sensitivity = column!(
+            text("Input sensitivity").font(bold).size(12),
+            row!(stack!(sensitivity_slider, progress_bar), text(format!("{:.0} dB", sensitivity_to_db(self.input_sensitivity))).font(bold).size(12)).spacing(12),
+        ).spacing(12);
 
         let input_volume = column!(
             text("Input volume").font(bold).size(12),
             row!(input_volume_slider, text(self.input_volume).font(bold).size(12)).spacing(12),
-        )
-            .spacing(12);
+        ).spacing(12);
 
         let output_volume = column!(
             text("Output volume").font(bold).size(12),
             row!(output_volume_slider, text(self.output_volume).font(bold).size(12)).spacing(12),
-        )
-            .spacing(12);
+        ).spacing(12);
 
-        let settings_container = column!(input_device, input_volume, input_device_sensitivity, output_device, output_volume).spacing(24);
+        let notification_volume = column!(
+            text("Notification volume").font(bold).size(12),
+            row!(notification_volume_slider, text(self.notification_volume).font(bold).size(12)).spacing(12),
+        ).spacing(12);
+
+        let settings_container = column!(
+            input_device,
+            input_volume,
+            input_device_sensitivity,
+            output_device,
+            output_volume,
+            notification_volume
+        ).spacing(24);
 
         container(
             Scrollable::with_direction(
@@ -514,6 +514,9 @@ impl Page for SettingsPage {
                     SettingsPageMessage::OutputVolumeChanged(volume) => {
                         self.output_volume = volume;
                     }
+                    SettingsPageMessage::NotificationVolumeChanged(volume) => {
+                        self.notification_volume = volume;
+                    }
                     SettingsPageMessage::InputStreamCreated(result) => match result {
                         Ok(()) => {
                             tracing::info!("Input stream task completed");
@@ -532,7 +535,7 @@ impl Page for SettingsPage {
             Message::VoiceInputSamplesReceived(mut samples) => {
                 adjust_volume(samples.as_mut(), self.input_volume as f32 / 100.0);
                 if !samples.is_empty() {
-                    self.voice_level = calculate_dbfs(samples.to_vec());
+                    self.voice_level = calculate_dbfs(&samples);
                 }
             }
             _ => {}
@@ -544,4 +547,9 @@ impl Page for SettingsPage {
     fn view(&self) -> Element<'_, Message> {
         self.settings_page().into()
     }
+}
+
+/// Convert sensitivity value (0-100) to dB range (-70 to 0)
+fn sensitivity_to_db(sensitivity: u8) -> f32 {
+    -70.0 + (sensitivity as f32 / 100.0) * 70.0
 }

@@ -296,6 +296,10 @@ impl Application {
                 self.write_config(|config| { config.audio.input_sensitivity = *input_sensitivity });
                 Task::none()
             }
+            Message::SettingsPage(SettingsPageMessage::NotificationVolumeChanged(notification_volume)) => {
+                self.write_config(|config| { config.audio.notification_volume = *notification_volume });
+                Task::none()
+            }
             Message::RoomPage(RoomPageMessage::UserVolumeChanged(user_id, volume)) => {
                 self.write_config(|config| { config.audio.users_volumes.insert(*user_id, *volume); });
                 Task::none()

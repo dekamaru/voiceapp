@@ -68,7 +68,7 @@ pub fn stereo_to_mono(stereo: &[f32], channels: u16) -> Vec<f32> {
     mono
 }
 
-pub fn calculate_dbfs(samples: Vec<f32>) -> f32 {
+pub fn calculate_dbfs(samples: &[f32]) -> f32 {
     let sum_squares: f32 = samples.iter().map(|&s| s * s).sum();
     let rms = (sum_squares / samples.len() as f32).sqrt();
 

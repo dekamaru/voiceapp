@@ -22,7 +22,8 @@ pub struct AudioConfig {
     pub input_device: AudioDevice,
     pub output_device: AudioDevice,
     pub input_sensitivity: u8,
-    pub users_volumes: HashMap<u64, u8>
+    pub users_volumes: HashMap<u64, u8>,
+    pub notification_volume: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -70,7 +71,8 @@ impl Default for AppConfig {
                     channels: output_stream_config.2,
                     volume: 70,
                 },
-                users_volumes: HashMap::new()
+                users_volumes: HashMap::new(),
+                notification_volume: 100,
             }
         }
     }

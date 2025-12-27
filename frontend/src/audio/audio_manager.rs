@@ -10,6 +10,7 @@ use crate::audio::audio_source::VoiceDecoderSource;
 use crate::audio::input::create_input_stream;
 use crate::audio::notification_player::NotificationPlayer;
 use crate::audio::output::{create_output_stream};
+use crate::audio::{adjust_volume, calculate_dbfs};
 use crate::config::AppConfig;
 
 /// Audio manager that handles recording and playback lifecycle
@@ -49,15 +50,27 @@ impl AudioManager {
         let (stream, mut receiver) = create_input_stream(config.audio.input_device.clone())?;
         let voice_input_tx = self.voice_client.get_voice_input_sender(config.audio.input_device.sample_rate)?;
         let is_muted = Arc::clone(&self.is_input_muted);
+        let app_config = Arc::clone(&self.app_config);
 
         // Spawn task to read from CPAL receiver and forward to voice input
         let task = tokio::spawn(async move {
-            while let Some(frame) = receiver.recv().await {
+            while let Some(mut frame) = receiver.recv().await {
                 // Skip sending if muted (lock-free check)
                 if !is_muted.load(Ordering::Relaxed) {
-                    if let Err(e) = voice_input_tx.send(frame).await {
-                        error!("Failed to send audio frame to pipeline: {}", e);
-                        break;
+                    // Load current config to get latest volume and sensitivity settings
+                    let config = app_config.load();
+                    let input_volume = config.audio.input_device.volume as f32 / 100.0;
+                    let input_sensitivity = config.audio.input_sensitivity as f32 / 100.0;
+
+                    // Apply volume adjustment
+                    adjust_volume(&mut frame, input_volume);
+
+                    let dbfs = calculate_dbfs(&frame);
+                    if dbfs >= input_sensitivity {
+                        if let Err(e) = voice_input_tx.send(frame).await {
+                            error!("Failed to send audio frame to pipeline: {}", e);
+                            break;
+                        }
                     }
                 }
             }
@@ -153,7 +166,8 @@ impl AudioManager {
     /// Play a notification sound (if notification player is initialized)
     pub fn play_notification(&self, sound_id: &str) {
         if let Some(player) = &self.notification_player {
-            player.play(sound_id);
+            let volume = self.app_config.load().audio.notification_volume;
+            player.play(sound_id, volume);
         }
     }
 
