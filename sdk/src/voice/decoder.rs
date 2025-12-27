@@ -25,7 +25,7 @@ impl Decoder {
     /// Create a new voice decoder with the specified target sample rate
     pub fn new(target_sample_rate: u32) -> Result<Self, DecoderError> {
         let neteq_config = NetEqConfig {
-            sample_rate: OPUS_SAMPLE_RATE,  // NetEQ operates at target rate
+            sample_rate: OPUS_SAMPLE_RATE,
             channels: OPUS_CHANNELS,
             ..Default::default()
         };
@@ -33,7 +33,6 @@ impl Decoder {
         let mut neteq = NetEq::new(neteq_config)
             .map_err(|e| DecoderError::NetEqError(e.to_string()))?;
 
-        // Create custom resampling decoder
         let decoder = OpusResamplingDecoder::new(
             OPUS_SAMPLE_RATE,
             target_sample_rate,
@@ -46,7 +45,6 @@ impl Decoder {
         Ok(Decoder { neteq: Mutex::new(neteq) })
     }
 
-    /// Insert a received voice packet into NetEQ for buffering and reordering
     pub fn consume_voice_data(&self, packet: VoiceData) -> Result<(), DecoderError> {
         let mut neteq = self.neteq.lock().map_err(|e| DecoderError::LockError(e.to_string()))?;
 
@@ -76,7 +74,7 @@ impl Decoder {
         AudioPacket::new(
             decoder_header,
             packet.opus_frame,
-            OPUS_SAMPLE_RATE,  // Opus operates at 48kHz
+            OPUS_SAMPLE_RATE,
             OPUS_CHANNELS,
             OPUS_FRAME_LENGTH_MS,
         )

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
-use crate::audio::{find_best_input_stream_config, find_best_output_stream_config, find_input_device_by_id, find_output_device_by_id, AudioManager};
+use crate::audio::{find_best_input_stream_config, find_best_output_stream_config, find_device_by_id, AudioManager};
 use crate::pages::login::{LoginPage, LoginPageMessage};
 use crate::pages::room::{RoomPage, RoomPageMessage};
 use crate::pages::settings::{SettingsPage, SettingsPageMessage};
@@ -199,13 +199,8 @@ impl Application {
                 info!("Selected input device: {}", device_id);
 
                 // Try to find device by name
-                let device = match find_input_device_by_id(device_id.clone()) {
-                    Ok(Some(dev)) => dev,
-                    Ok(None) => {
-                        // TODO: refresh device list message
-                        error!("Device '{}' not found", device_id);
-                        return Task::none();
-                    }
+                let device = match find_device_by_id(device_id.clone()) {
+                    Ok(dev) => dev,
                     Err(e) => {
                         error!("Failed to find device '{}': {}", device_id, e);
                         return Task::none();
@@ -242,13 +237,8 @@ impl Application {
                 info!("Selected output device: {}", device_id);
 
                 // Try to find device by name
-                let device = match find_output_device_by_id(device_id.clone()) {
-                    Ok(Some(dev)) => dev,
-                    Ok(None) => {
-                        // TODO: refresh device list message
-                        error!("Device '{}' not found", device_id);
-                        return Task::none();
-                    }
+                let device = match find_device_by_id(device_id.clone()) {
+                    Ok(dev) => dev,
                     Err(e) => {
                         error!("Failed to find device '{}': {}", device_id, e);
                         return Task::none();

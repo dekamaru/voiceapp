@@ -1,90 +1,26 @@
 use std::collections::HashMap;
-use std::str::FromStr;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, Device, DeviceId, SampleFormat, SampleRate, Stream, StreamConfig};
+use cpal::{BufferSize, Device, SampleFormat, SampleRate, Stream, StreamConfig};
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error};
+use crate::audio::common::{find_best_stream_config, find_device_by_id, list_devices_by_id, stereo_to_mono};
 use crate::config::AudioDevice;
 
-const TARGET_SAMPLE_RATE: u32 = 48000;
+pub fn list_input_devices() -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+    list_devices_by_id(cpal::default_host().input_devices()?)
+}
 
-/// Audio frame: mono F32 samples
-pub type AudioFrame = Vec<f32>;
-
-/// Find best stream config with prioritization:
-/// 1. 48000 Hz + F32
-/// 2. 48000 Hz + I16
-/// 3. 48000 Hz + U16
-/// 4. Any Hz + F32
-/// 5. First available config
-/// Returns (SampleRate, SampleFormat)
 pub fn find_best_input_stream_config(
     device: &Device,
 ) -> Result<(SampleRate, SampleFormat, u16), Box<dyn std::error::Error>> {
     let configs: Vec<_> = device.supported_input_configs()?.collect();
-
-    if configs.is_empty() {
-        return Err("No input configurations found".into());
-    }
-
-    // Priority list: (target_rate, format) where None means any rate
-    let priorities = [
-        (Some(TARGET_SAMPLE_RATE), SampleFormat::F32),
-        (Some(TARGET_SAMPLE_RATE), SampleFormat::I16),
-        (Some(TARGET_SAMPLE_RATE), SampleFormat::U16),
-        (None, SampleFormat::F32),
-    ];
-
-    for (target_rate, format) in priorities {
-        for config in &configs {
-            if config.sample_format() == format {
-                if let Some(rate) = target_rate {
-                    if config.min_sample_rate() <= rate
-                        && config.max_sample_rate() >= rate
-                    {
-                        return Ok((rate, format, config.channels()));
-                    }
-                } else {
-                    return Ok((config.max_sample_rate(), format, config.channels()));
-                }
-            }
-        }
-    }
-
-    // Fallback: first available config
-    let first_config = &configs[0];
-    Ok((first_config.max_sample_rate(), first_config.sample_format(), first_config.channels()))
-}
-
-/// Convert stereo to mono by averaging channels (F32)
-fn stereo_to_mono(stereo: &[f32], channels: u16) -> Vec<f32> {
-    if channels == 1 {
-        return stereo.to_vec();
-    }
-
-    let frame_count = stereo.len() / channels as usize;
-    let mut mono = Vec::with_capacity(frame_count);
-
-    for frame_idx in 0..frame_count {
-        let mut sum = 0.0f32;
-        for ch in 0..channels as usize {
-            sum += stereo[frame_idx * channels as usize + ch];
-        }
-        mono.push(sum / channels as f32);
-    }
-
-    mono
+    find_best_stream_config(configs)
 }
 
 /// Create input stream that captures audio and sends frames through channel
-/// Returns (stream, actual_sample_rate, receiver)
-pub fn create_input_stream(device_config: AudioDevice) -> Result<(Stream, mpsc::UnboundedReceiver<AudioFrame>), Box<dyn std::error::Error>> {
-    let device = match find_input_device_by_id(device_config.device_id.clone())? {
-        Some(dev) => dev,
-        None => {
-            return Err(format!("Input device '{}' not found", device_config.device_id).into());
-        }
-    };
+/// Returns (stream, receiver)
+pub fn create_input_stream(device_config: AudioDevice) -> Result<(Stream, mpsc::UnboundedReceiver<Vec<f32>>), Box<dyn std::error::Error>> {
+    let device = find_device_by_id(device_config.device_id.clone())?;
 
     let stream_config = StreamConfig {
         channels: device_config.channels,
@@ -93,7 +29,6 @@ pub fn create_input_stream(device_config: AudioDevice) -> Result<(Stream, mpsc::
     };
 
     let (tx, rx) = mpsc::unbounded_channel();
-
 
     // Match on sample format to build the appropriate stream
     let stream = match device_config.sample_format.as_str() {
@@ -149,29 +84,4 @@ pub fn create_input_stream(device_config: AudioDevice) -> Result<(Stream, mpsc::
     stream.play()?;
 
     Ok((stream, rx))
-}
-
-pub fn list_input_devices() -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
-    let host = cpal::default_host();
-    let devices = host.input_devices()?;
-
-    let mut result = HashMap::new();
-    for device in devices {
-        let id = device.id()?.to_string();
-        let name = device.description()?.name().to_string();
-        result.insert(id, name);
-    }
-
-    Ok(result)
-}
-
-pub fn find_input_device_by_id(id: String) -> Result<Option<Device>, Box<dyn std::error::Error>> {
-    let parsed = DeviceId::from_str(&id)?;
-    let host = cpal::default_host();
-
-    if let Some(device) = host.device_by_id(&parsed) {
-        Ok(Some(device))
-    } else {
-        Err(format!("Input device '{}' not found", &id).into())
-    }
 }

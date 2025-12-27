@@ -1,5 +1,5 @@
 use cpal::Stream;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use arc_swap::ArcSwap;
 use tokio::task::JoinHandle;
@@ -9,7 +9,7 @@ use voiceapp_sdk::Client;
 use crate::audio::audio_source::VoiceDecoderSource;
 use crate::audio::input::create_input_stream;
 use crate::audio::notification_player::NotificationPlayer;
-use crate::audio::output::{create_output_stream, AudioOutputHandle};
+use crate::audio::output::{create_output_stream};
 use crate::config::AppConfig;
 
 /// Audio manager that handles recording and playback lifecycle
@@ -18,10 +18,10 @@ pub struct AudioManager {
     voice_client: Arc<Client>,
     input_stream: Option<Stream>,
     input_receiver_task: Option<JoinHandle<()>>,
-    output_streams: std::collections::HashMap<u64, AudioOutputHandle>,
+    output_streams: std::collections::HashMap<u64, Stream>,
     is_input_muted: Arc<AtomicBool>,
     notification_player: Option<Arc<NotificationPlayer>>,
-    notification_stream: Option<AudioOutputHandle>,
+    notification_stream: Option<Stream>,
 }
 
 impl AudioManager {

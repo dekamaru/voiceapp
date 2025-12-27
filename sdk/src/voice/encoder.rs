@@ -26,7 +26,6 @@ impl Encoder {
     }
 
     /// Encode audio samples to Opus format
-    /// Pads with zeros if needed to reach OPUS_FRAME_SAMPLES
     pub fn encode(&mut self, samples: &[f32]) -> Result<VoiceData, String> {
         assert!(
             samples.len() <= OPUS_FRAME_SIZE as usize,
