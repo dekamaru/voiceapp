@@ -1,10 +1,11 @@
+use dashmap::DashMap;
 use rand::random;
-use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 use voiceapp_protocol::{Packet, ParticipantInfo, ProtocolError};
 
@@ -30,8 +31,8 @@ pub struct User {
 /// and broadcasts events to all connected clients
 #[derive(Clone)]
 pub struct ManagementServer {
-    pub users: Arc<RwLock<HashMap<SocketAddr, User>>>,
-    next_user_id: Arc<RwLock<u64>>,
+    users: Arc<DashMap<SocketAddr, User>>,
+    next_user_id: Arc<AtomicU64>,
     broadcast_tx: Arc<broadcast::Sender<BroadcastMessage>>,
     disconnect_tx: Arc<broadcast::Sender<u64>>,
 }
@@ -42,30 +43,28 @@ impl ManagementServer {
         let (disconnect_tx, _) = broadcast::channel(100);
 
         ManagementServer {
-            users: Arc::new(RwLock::new(HashMap::new())),
-            next_user_id: Arc::new(RwLock::new(1)),
+            users: Arc::new(DashMap::new()),
+            next_user_id: Arc::new(AtomicU64::new(1)),
             broadcast_tx: Arc::new(broadcast_tx),
             disconnect_tx: Arc::new(disconnect_tx),
         }
     }
 
     /// Get user ID by token, returns None if token is invalid
-    pub async fn get_user_id_by_token(&self, token: u64) -> Option<u64> {
-        let users_lock = self.users.read().await;
-        users_lock
-            .values()
-            .find(|user| user.token == token)
-            .map(|user| user.id)
+    pub fn get_user_id_by_token(&self, token: u64) -> Option<u64> {
+        self.users
+            .iter()
+            .find(|entry| entry.value().token == token)
+            .map(|entry| entry.value().id)
     }
 
     /// Check if a user is in the voice channel
     /// TODO: not optimised lookup
-    pub async fn is_user_in_voice(&self, user_id: u64) -> bool {
-        let users_lock = self.users.read().await;
-        users_lock
-            .values()
-            .find(|user| user.id == user_id)
-            .map(|user| user.in_voice)
+    pub fn is_user_in_voice(&self, user_id: u64) -> bool {
+        self.users
+            .iter()
+            .find(|entry| entry.value().id == user_id)
+            .map(|entry| entry.value().in_voice)
             .unwrap_or(false)
     }
 
@@ -235,12 +234,7 @@ impl ManagementServer {
     ) -> Result<(), Box<dyn std::error::Error>> {
 
         // Generate new user ID
-        let user_id = {
-            let mut id_lock = self.next_user_id.write().await;
-            let current_id = *id_lock;
-            *id_lock = current_id + 1;
-            current_id
-        };
+        let user_id = self.next_user_id.fetch_add(1, Ordering::Relaxed);
 
         let voice_token = random::<u64>();
 
@@ -254,19 +248,17 @@ impl ManagementServer {
             token: voice_token,
         };
 
-        {
-            let mut users_lock = self.users.write().await;
-            users_lock.insert(peer_addr, user);
-        }
+        self.users.insert(peer_addr, user);
 
         // Collect current participants for login response
-        let participants = {
-            let users_lock = self.users.read().await;
-            users_lock
-                .values()
-                .map(|u| ParticipantInfo::new(u.id, u.username.clone(), u.in_voice, u.is_muted))
-                .collect::<Vec<_>>()
-        };
+        let participants = self
+            .users
+            .iter()
+            .map(|entry| {
+                let u = entry.value();
+                ParticipantInfo::new(u.id, u.username.clone(), u.in_voice, u.is_muted)
+            })
+            .collect::<Vec<_>>();
 
         // Send login response with participant list
         let response = Packet::LoginResponse {
@@ -308,8 +300,7 @@ impl ManagementServer {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Get user ID and update in_voice state
         let user_id = {
-            let mut users_lock = self.users.write().await;
-            if let Some(user) = users_lock.get_mut(&peer_addr) {
+            if let Some(mut user) = self.users.get_mut(&peer_addr) {
                 let user_id = user.id;
                 user.in_voice = true;
                 user.is_muted = false; // by default user is not muted
@@ -347,8 +338,7 @@ impl ManagementServer {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Get user ID and update in_voice state
         let user_id = {
-            let mut users_lock = self.users.write().await;
-            if let Some(user) = users_lock.get_mut(&peer_addr) {
+            if let Some(mut user) = self.users.get_mut(&peer_addr) {
                 let user_id = user.id;
                 user.in_voice = false;
                 user.is_muted = false;
@@ -380,11 +370,8 @@ impl ManagementServer {
 
     /// Handle user disconnection: remove from users map and broadcast left server event
     async fn handle_user_disconnect(&self, peer_addr: SocketAddr) {
-        // Remove user from the users HashMap
-        let user_option = {
-            let mut users_lock = self.users.write().await;
-            users_lock.remove(&peer_addr)
-        };
+        // Remove user from the users DashMap
+        let user_option = self.users.remove(&peer_addr).map(|(_, user)| user);
 
         // If user was found, broadcast the disconnection and log
         if let Some(user) = user_option {
@@ -430,8 +417,7 @@ impl ManagementServer {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Get user info
         let user_id = {
-            let users_lock = self.users.read().await;
-            if let Some(user) = users_lock.get(&peer_addr) {
+            if let Some(user) = self.users.get(&peer_addr) {
                 user.id
             } else {
                 return Err("User not found in users map".into());
@@ -479,8 +465,7 @@ impl ManagementServer {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Update user's mute state
         {
-            let mut users_lock = self.users.write().await;
-            if let Some(user) = users_lock.get_mut(&peer_addr) {
+            if let Some(mut user) = self.users.get_mut(&peer_addr) {
                 user.is_muted = is_muted;
             } else {
                 return Err("User not found in users map".into());

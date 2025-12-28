@@ -114,7 +114,7 @@ impl VoiceRelayServer {
         data: Vec<u8>,
         udp_socket: &Arc<UdpSocket>,
     ) {
-        if !self.management.is_user_in_voice(sender_user_id).await {
+        if !self.management.is_user_in_voice(sender_user_id) {
             error!(
                 "Received voice packet from user which is not in voice!, sender_id={}",
                 sender_user_id
@@ -128,7 +128,7 @@ impl VoiceRelayServer {
         for (&addr, &uid) in authenticated_addrs.iter() {
             // Skip sender and check if recipient is in voice channel
             // TODO: not optimised lookup
-            if uid != sender_user_id && self.management.is_user_in_voice(uid).await {
+            if uid != sender_user_id && self.management.is_user_in_voice(uid) {
                 dest_addrs.push(addr);
             }
         }
@@ -162,7 +162,7 @@ impl VoiceRelayServer {
         debug!("Received auth packet from {}", src_addr);
 
         // Try to get user_id from token
-        let user_id_opt = self.management.get_user_id_by_token(voice_token).await;
+        let user_id_opt = self.management.get_user_id_by_token(voice_token);
         let token_valid = user_id_opt.is_some();
 
         if token_valid {
