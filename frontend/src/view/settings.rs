@@ -1,4 +1,4 @@
-use crate::application::{Message, Page, PageType};
+use crate::application::{Message, ViewType};
 use crate::audio::{adjust_volume, calculate_dbfs, create_input_stream, list_input_devices, list_output_devices};
 use crate::colors::{text_chat_header, text_primary, DARK_BACKGROUND, DARK_CONTAINER_BACKGROUND};
 use crate::icons::Icons;
@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::error;
 use crate::config::AppConfig;
+use crate::view::view::View;
 
 pub struct SettingsPage {
     app_config: Arc<ArcSwap<AppConfig>>,
@@ -319,7 +320,7 @@ impl SettingsPage {
         let header = row!(
             container(
                 Widgets::icon_button(Icons::arrow_left_solid(None, 24))
-                    .on_press(Message::SwitchPage(PageType::Room))
+                    .on_press(Message::SwitchView(ViewType::Room))
                     .height(Length::Fill)
             ),
             container(text("Settings").font(bold).size(18))
@@ -476,7 +477,7 @@ impl SettingsPage {
     }
 }
 
-impl Page for SettingsPage {
+impl View for SettingsPage {
     fn on_open(&mut self) -> Task<Message> { self.start_input_stream() }
     fn on_close(&mut self) -> Task<Message> { self.stop_input_stream(); Task::none() }
 
@@ -529,7 +530,7 @@ impl Page for SettingsPage {
             },
             Message::KeyPressed(key) => {
                 if matches!(key,iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)) {
-                    return Task::done(Message::SwitchPage(PageType::Room))
+                    return Task::done(Message::SwitchView(ViewType::Room))
                 }
             }
             Message::VoiceInputSamplesReceived(mut samples) => {
@@ -544,7 +545,7 @@ impl Page for SettingsPage {
         Task::none()
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    fn render(&self) -> Element<'_, Message> {
         self.settings_page().into()
     }
 }

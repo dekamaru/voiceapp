@@ -1,18 +1,21 @@
 use async_channel::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 
-pub use crate::error::ClientError;
+use crate::error::SdkError;
 use crate::network::{TcpClient, UdpClient, EventHandler, ClientEvent, ApiClient};
-use crate::{voice, Decoder};
+use crate::voice;
+use crate::voice::decoder::Decoder;
 
-/// The VoiceClient for managing voice connections
+/// Voice communication client
 pub struct Client {
     tcp_client: TcpClient,
     udp_client: UdpClient,
     api_client: ApiClient,
     event_handler: EventHandler,
     voice_io_manager: Mutex<voice::io_manager::InputOutputManager>,
+    user_id: AtomicU64,
 }
 
 impl Client {
@@ -34,6 +37,7 @@ impl Client {
             api_client,
             event_handler,
             voice_io_manager,
+            user_id: AtomicU64::new(0),
         }
     }
 
@@ -44,48 +48,42 @@ impl Client {
     }
 
     /// Returns stream which should be used for raw input samples sending
-    pub fn get_voice_input_sender(&self, input_sample_rate: u32) -> Result<Sender<Vec<f32>>, ClientError> {
-        let mut manager = self.voice_io_manager.lock()
-            .map_err(|e| ClientError::VoiceInputOutputManagerError(format!("failed to get lock: {}", e)))?;
-
-        let sender = manager.get_voice_input_sender(input_sample_rate)
-            .map_err(|e| ClientError::VoiceInputOutputManagerError(format!("failed to get voice input sender: {}", e)))?;
-
+    pub fn get_voice_input_sender(&self, input_sample_rate: u32) -> Result<Sender<Vec<f32>>, SdkError> {
+        let mut manager = self.voice_io_manager.lock().map_err(|_| SdkError::LockError)?;
+        let sender = manager.get_voice_input_sender(input_sample_rate)?;
         Ok(sender)
     }
 
-    pub fn get_voice_output_for(&self, user_id: u64, output_sample_rate: usize) -> Result<Arc<Decoder>, ClientError> {
-        let mut manager = self.voice_io_manager.lock()
-            .map_err(|e| ClientError::VoiceInputOutputManagerError(format!("failed to get lock: {}", e)))?;
-
-        let decoder = manager.get_voice_output_for(user_id, output_sample_rate as u32);
-
+    /// Get or create a voice output decoder for a specific user
+    ///
+    /// # Note
+    /// This method blocks. Avoid calling from async contexts.
+    pub fn get_or_create_voice_output(&self, user_id: u64, sample_rate: u32) -> Result<Arc<Decoder>, SdkError> {
+        let mut manager = self.voice_io_manager.lock().map_err(|_| SdkError::LockError)?;
+        let decoder = manager.get_or_create_voice_output(user_id, sample_rate)?;
         Ok(decoder)
     }
 
     /// To cleanup voice decoder
-    pub fn remove_voice_output_for(&self, user_id: u64) -> Result<(), ClientError> {
-        let mut manager = self.voice_io_manager.lock()
-            .map_err(|e| ClientError::VoiceInputOutputManagerError(format!("failed to get lock: {}", e)))?;
-
+    pub fn remove_voice_output_for(&self, user_id: u64) -> Result<(), SdkError> {
+        let mut manager = self.voice_io_manager.lock().map_err(|_| SdkError::LockError)?;
         manager.remove_voice_output_for(user_id);
         Ok(())
     }
 
-    pub fn remove_all_voice_outputs(&self) -> Result<(), ClientError> {
-        let mut manager = self.voice_io_manager.lock()
-            .map_err(|e| ClientError::VoiceInputOutputManagerError(format!("failed to get lock: {}", e)))?;
-
+    pub fn remove_all_voice_outputs(&self) -> Result<(), SdkError> {
+        let mut manager = self.voice_io_manager.lock().map_err(|_| SdkError::LockError)?;
         manager.remove_all_voice_outputs();
         Ok(())
     }
 
+    /// Connects to the management and voice servers, returns user_id.
     pub async fn connect(
         &self,
         management_server_addr: &str,
         voice_server_addr: &str,
         username: &str,
-    ) -> Result<(), ClientError> {
+    ) -> Result<u64, SdkError> {
         // Connect TCP socket
         self.tcp_client.connect(management_server_addr).await?;
         self.event_handler.listen_to_packets(self.tcp_client.packet_stream());
@@ -95,52 +93,26 @@ impl Client {
         self.udp_client.connect(voice_server_addr).await?;
         info!("[Voice server] Connected to {}", voice_server_addr);
 
-        let voice_token = self.api_client.authenticate_management(username).await?;
+        let (user_id, voice_token) = self.api_client.authenticate_management(username).await?;
+        self.user_id.store(user_id, Ordering::Relaxed);
         self.api_client.authenticate_voice(voice_token).await?;
 
-        Ok(())
+        Ok(user_id)
     }
 
-    pub async fn join_channel(&self) -> Result<(), ClientError> {
+    pub async fn join_channel(&self) -> Result<(), SdkError> {
         self.api_client.join_channel().await
     }
 
-    pub async fn leave_channel(&self) -> Result<(), ClientError> {
+    pub async fn leave_channel(&self) -> Result<(), SdkError> {
         self.api_client.leave_channel().await
     }
 
-    pub async fn send_message(&self, message: &str) -> Result<(), ClientError> {
+    pub async fn send_message(&self, message: &str) -> Result<(), SdkError> {
         self.api_client.send_message(message).await
     }
 
-    pub async fn send_mute_state(&self, is_muted: bool) -> Result<(), ClientError> {
-        let state = self.event_handler.state();
-        let lock = state.read().await;
-        let maybe_user_id = lock.user_id;
-        drop(lock);
-
-        if let Some(user_id) = maybe_user_id {
-            let _ = self.api_client.send_mute_state(user_id, is_muted).await;
-        }
-
-        Ok(())
-    }
-
-    /// Get list of user IDs currently in voice channel (blocking version)
-    pub fn get_users_in_voice(&self) -> Vec<u64> {
-        let state_arc = self.event_handler.state();
-        let state = state_arc.blocking_read();
-        state
-            .participants
-            .iter()
-            .filter(|(_, info)| info.in_voice)
-            .map(|(id, _)| *id)
-            .collect()
-    }
-
-    pub fn is_in_voice_channel(&self) -> bool {
-        let state_arc = self.event_handler.state();
-        let state = state_arc.blocking_read();
-        state.in_voice_channel
+    pub async fn send_mute_state(&self, is_muted: bool) -> Result<(), SdkError> {
+        self.api_client.send_mute_state(self.user_id.load(Ordering::Relaxed), is_muted).await
     }
 }

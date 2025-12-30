@@ -105,7 +105,7 @@ impl AudioManager {
         info!("Creating output stream for user {}", user_id);
 
         let config = self.app_config.load();
-        let decoder = self.voice_client.get_voice_output_for(user_id, config.audio.output_device.sample_rate.clone() as usize)?;
+        let decoder = self.voice_client.get_or_create_voice_output(user_id, config.audio.output_device.sample_rate)?;
 
         // Wrap decoder in AudioSource trait adapter
         let decoder_source = Arc::new(VoiceDecoderSource::new(decoder));

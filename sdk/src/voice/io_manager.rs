@@ -3,12 +3,13 @@ use async_channel::{unbounded, Receiver, Sender};
 use dashmap::DashMap;
 use tracing::{error, info};
 use voiceapp_protocol::Packet;
-use crate::voice::input_pipeline::{InputPipeline};
+use crate::error::SdkError;
+use crate::voice::input_pipeline::InputPipeline;
 use crate::voice::decoder::VoiceData;
-use crate::Decoder;
+use crate::voice::decoder::Decoder;
 
 /// Manages voice input and output with dynamic sample rate configuration
-pub struct InputOutputManager {
+pub(crate) struct InputOutputManager {
     send_tx: Sender<Vec<u8>>,
     input_pipeline: Option<InputPipeline>,
     output_decoders: Arc<DashMap<u64, (u32, Arc<Decoder>)>>,
@@ -30,7 +31,7 @@ impl InputOutputManager {
 
     /// Get the voice input sender for external audio sources
     /// External sources can change, but they all write to the same stream
-    pub fn get_voice_input_sender(&mut self, input_sample_rate: u32) -> Result<Sender<Vec<f32>>, String> {
+    pub fn get_voice_input_sender(&mut self, input_sample_rate: u32) -> Result<Sender<Vec<f32>>, SdkError> {
         // Drop the old pipeline
         self.input_pipeline = None;
 
@@ -53,13 +54,13 @@ impl InputOutputManager {
     /// Get or create a voice output decoder for a specific user
     /// If decoder exists and sample rate matches, returns existing decoder
     /// If sample rate changed, creates new decoder with new sample rate
-    pub fn get_voice_output_for(&mut self, user_id: u64, output_sample_rate: u32) -> Arc<Decoder> {
+    pub fn get_or_create_voice_output(&mut self, user_id: u64, output_sample_rate: u32) -> Result<Arc<Decoder>, SdkError> {
         // Check if decoder exists for this user
         if let Some(entry) = self.output_decoders.get(&user_id) {
             let (current_sample_rate, decoder) = entry.value();
             // If sample rate matches, return existing decoder
             if *current_sample_rate == output_sample_rate {
-                return Arc::clone(decoder);
+                return Ok(Arc::clone(decoder));
             }
 
             // Sample rate changed, will create new decoder below
@@ -67,17 +68,14 @@ impl InputOutputManager {
         }
 
         // Create new decoder with the specified sample rate
-        let decoder = Arc::new(
-            Decoder::new(output_sample_rate)
-                .expect("Failed to create voice decoder")
-        );
+        let decoder = Arc::new(Decoder::new(output_sample_rate)?);
 
         // Store decoder with its sample rate
         self.output_decoders.insert(user_id, (output_sample_rate, Arc::clone(&decoder)));
 
         info!("Created voice decoder for user {} with sample rate {}", user_id, output_sample_rate);
 
-        decoder
+        Ok(decoder)
     }
 
     pub fn remove_voice_output_for(&mut self, user_id: u64) {

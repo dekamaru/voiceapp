@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 use voiceapp_protocol::{Packet, ParticipantInfo};
 
-/// Events emitted by VoiceClient when state changes occur
+/// Events from the voice server
 #[derive(Debug, Clone)]
 pub enum ClientEvent {
     /// Initial participant list sent after successful connection
@@ -34,16 +34,8 @@ pub enum ClientEvent {
     },
 }
 
-/// Client-side state for voice connection
-pub struct ClientState {
-    pub user_id: Option<u64>,
-    pub participants: HashMap<u64, ParticipantInfo>,
-    pub in_voice_channel: bool,
-}
-
 /// Handles TCP event processing and emits client events
 pub struct EventHandler {
-    state: Arc<RwLock<ClientState>>,
     event_tx: Sender<ClientEvent>,
     event_rx: Receiver<ClientEvent>,
 }
@@ -53,15 +45,7 @@ impl EventHandler {
     pub fn new() -> Self {
         let (event_tx, event_rx) = unbounded();
         
-        // Create initial empty state
-        let state = Arc::new(RwLock::new(ClientState {
-            user_id: None,
-            participants: HashMap::new(),
-            in_voice_channel: false,
-        }));
-        
         Self {
-            state,
             event_tx,
             event_rx,
         }
@@ -72,28 +56,15 @@ impl EventHandler {
         self.event_rx.clone()
     }
 
-    /// Get state accessor for read operations
-    pub fn state(&self) -> Arc<RwLock<ClientState>> {
-        Arc::clone(&self.state)
-    }
-
     /// Listen to incoming packets and process events
     pub fn listen_to_packets(&self, packet_rx: Receiver<Packet>) {
-        let state = Arc::clone(&self.state);
         let event_tx = self.event_tx.clone();
 
         tokio::spawn(async move {
             loop {
                 match packet_rx.recv().await {
                     Ok(packet) => {
-                        let result = Self::handle_packet(
-                            packet,
-                            &state,
-                            &event_tx,
-                        )
-                        .await;
-
-                        if let Err(e) = result {
+                        if let Err(e) = Self::handle_packet(packet, &event_tx).await {
                             error!("Event handling error: {}", e);
                         }
                     }
@@ -107,38 +78,28 @@ impl EventHandler {
     }
 
     /// Handle individual packet based on type
-    async fn handle_packet(
-        packet: Packet,
-        state: &Arc<RwLock<ClientState>>,
-        event_tx: &Sender<ClientEvent>,
-    ) -> Result<(), String> {
+    async fn handle_packet(packet: Packet, event_tx: &Sender<ClientEvent>) -> Result<(), String> {
         match packet {
             Packet::LoginResponse { request_id: _, id, voice_token: _, participants } => {
-                Self::handle_login_response(id, participants, state, event_tx).await
-            }
-            Packet::JoinVoiceChannelResponse { request_id: _, success: _ } => {
-                Self::handle_join_voice_channel_response(state).await
-            }
-            Packet::LeaveVoiceChannelResponse { request_id: _, success: _ } => {
-                Self::handle_leave_voice_channel_response(state).await
+                Self::handle_login_response(id, participants, event_tx).await
             }
             Packet::UserJoinedServer { participant } => {
-                Self::handle_user_joined_server(participant, state, event_tx).await
+                Self::handle_user_joined_server(participant, event_tx).await
             }
             Packet::UserLeftServer { user_id } => {
-                Self::handle_user_left_server(user_id, state, event_tx).await
+                Self::handle_user_left_server(user_id, event_tx).await
             }
             Packet::UserJoinedVoice { user_id } => {
-                Self::handle_user_joined_voice(user_id, state, event_tx).await
+                Self::handle_user_joined_voice(user_id, event_tx).await
             }
             Packet::UserLeftVoice { user_id } => {
-                Self::handle_user_left_voice(user_id, state, event_tx).await
+                Self::handle_user_left_voice(user_id, event_tx).await
             }
             Packet::UserSentMessage { user_id, timestamp, message } => {
                 Self::handle_user_sent_message(user_id, timestamp, message, event_tx).await
             }
             Packet::UserMuteState { user_id, is_muted } => {
-                Self::handle_user_mute_state(user_id, is_muted, state, event_tx).await
+                Self::handle_user_mute_state(user_id, is_muted, event_tx).await
             }
             _ => { Ok(()) }
         }
@@ -147,67 +108,26 @@ impl EventHandler {
     async fn handle_login_response(
         id: u64,
         participants: Vec<ParticipantInfo>,
-        state: &Arc<RwLock<ClientState>>,
         event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
-        // Update client state with user_id and participants
-        let mut s = state.write().await;
-        s.user_id = Some(id);
-        s.participants = participants
-            .iter()
-            .map(|p| (p.user_id, p.clone()))
-            .collect();
-        drop(s);
-
-        // Emit ParticipantsList event
-        let _ = event_tx
-            .send(ClientEvent::ParticipantsList {
-                user_id: id,
-                participants,
-            })
-            .await;
+        if event_tx.send(ClientEvent::ParticipantsList { user_id: id, participants }).await.is_err() {
+            tracing::warn!("channel closed");
+        }
 
         debug!("Login successful: user_id={}", id);
         Ok(())
     }
 
-    async fn handle_join_voice_channel_response(
-        state: &Arc<RwLock<ClientState>>,
-    ) -> Result<(), String> {
-        let mut s = state.write().await;
-        s.in_voice_channel = true;
-        drop(s);
-
-        info!("Joined voice channel");
-        Ok(())
-    }
-
-    async fn handle_leave_voice_channel_response(
-        state: &Arc<RwLock<ClientState>>,
-    ) -> Result<(), String> {
-        let mut s = state.write().await;
-        s.in_voice_channel = false;
-        drop(s);
-
-        info!("Left voice channel");
-        Ok(())
-    }
-
     async fn handle_user_joined_server(
         participant: ParticipantInfo,
-        state: &Arc<RwLock<ClientState>>,
         event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
         let user_id = participant.user_id;
         let username = participant.username.clone();
 
-        let mut s = state.write().await;
-        s.participants.insert(user_id, participant);
-        drop(s);
-
-        let _ = event_tx
-            .send(ClientEvent::UserJoinedServer { user_id, username })
-            .await;
+        if event_tx.send(ClientEvent::UserJoinedServer { user_id, username }).await.is_err() {
+            tracing::warn!("channel closed");
+        }
 
         debug!("User joined server: id={}", user_id);
         Ok(())
@@ -215,14 +135,11 @@ impl EventHandler {
 
     async fn handle_user_left_server(
         user_id: u64,
-        state: &Arc<RwLock<ClientState>>,
         event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
-        let mut s = state.write().await;
-        s.participants.remove(&user_id);
-        drop(s);
-
-        let _ = event_tx.send(ClientEvent::UserLeftServer { user_id }).await;
+        if event_tx.send(ClientEvent::UserLeftServer { user_id }).await.is_err() {
+            tracing::warn!("channel closed");
+        }
 
         debug!("User left server: id={}", user_id);
         Ok(())
@@ -230,19 +147,11 @@ impl EventHandler {
 
     async fn handle_user_joined_voice(
         user_id: u64,
-        state: &Arc<RwLock<ClientState>>,
         event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
-        let mut s = state.write().await;
-        if let Some(participant) = s.participants.get_mut(&user_id) {
-            participant.in_voice = true;
-            participant.is_muted = false;
+        if event_tx.send(ClientEvent::UserJoinedVoice { user_id }).await.is_err() {
+            tracing::warn!("channel closed");
         }
-        drop(s);
-
-        let _ = event_tx
-            .send(ClientEvent::UserJoinedVoice { user_id })
-            .await;
 
         debug!("User joined voice: id={}", user_id);
         Ok(())
@@ -250,19 +159,11 @@ impl EventHandler {
 
     async fn handle_user_left_voice(
         user_id: u64,
-        state: &Arc<RwLock<ClientState>>,
         event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
-        let mut s = state.write().await;
-        if let Some(participant) = s.participants.get_mut(&user_id) {
-            participant.in_voice = false;
-            participant.is_muted = false;
+        if event_tx.send(ClientEvent::UserLeftVoice { user_id }).await.is_err() {
+            tracing::warn!("channel closed");
         }
-        drop(s);
-
-        let _ = event_tx
-            .send(ClientEvent::UserLeftVoice { user_id })
-            .await;
 
         debug!("User left voice: id={}", user_id);
         Ok(())
@@ -274,13 +175,9 @@ impl EventHandler {
         message: String,
         event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
-        let _ = event_tx
-            .send(ClientEvent::UserSentMessage {
-                user_id,
-                timestamp,
-                message,
-            })
-            .await;
+        if event_tx.send(ClientEvent::UserSentMessage { user_id, timestamp, message }).await.is_err() {
+            tracing::warn!("channel closed");
+        }
 
         Ok(())
     }
@@ -288,18 +185,11 @@ impl EventHandler {
     async fn handle_user_mute_state(
         user_id: u64,
         is_muted: bool,
-        state: &Arc<RwLock<ClientState>>,
         event_tx: &Sender<ClientEvent>,
     ) -> Result<(), String> {
-        let mut s = state.write().await;
-        if let Some(participant) = s.participants.get_mut(&user_id) {
-            participant.is_muted = is_muted;
+        if event_tx.send(ClientEvent::UserMuteState { user_id, is_muted }).await.is_err() {
+            tracing::warn!("channel closed");
         }
-        drop(s);
-
-        let _ = event_tx
-            .send(ClientEvent::UserMuteState { user_id, is_muted })
-            .await;
 
         debug!("User mute state changed: id={}, is_muted={}", user_id, is_muted);
         Ok(())

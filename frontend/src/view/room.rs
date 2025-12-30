@@ -1,4 +1,4 @@
-use crate::application::{Message, Page, PageType, VoiceCommand, VoiceCommandResult};
+use crate::application::{Message, ViewType};
 use crate::colors::{color_alert, color_error, color_success, divider_bg, slider_bg, slider_thumb, text_chat_header, text_primary, text_secondary, DARK_CONTAINER_BACKGROUND};
 use crate::icons::Icons;
 use crate::widgets::Widgets;
@@ -22,7 +22,9 @@ use tracing::{debug, warn};
 use tracing::log::info;
 use voiceapp_sdk::{ParticipantInfo, ClientEvent};
 use crate::config::AppConfig;
-use crate::pages::settings::SettingsPageMessage;
+use crate::view::settings::SettingsPageMessage;
+use crate::state::voice_client::{VoiceCommand, VoiceCommandResult};
+use crate::view::view::View;
 
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
@@ -263,7 +265,7 @@ impl RoomPage {
 
         let settings_button = container(
             Widgets::icon_button(Icons::gear_six_fill(None, 24))
-                .on_press(Message::SwitchPage(PageType::Settings)),
+                .on_press(Message::SwitchView(ViewType::Settings)),
         )
         .align_y(Alignment::Center)
         .height(48);
@@ -511,7 +513,7 @@ impl RoomPage {
     }
 }
 
-impl Page for RoomPage {
+impl View for RoomPage {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::RoomPage(room_message) => match room_message {
@@ -652,7 +654,7 @@ impl Page for RoomPage {
         Task::none()
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    fn render(&self) -> Element<'_, Message> {
         self.main_screen().into()
     }
 }

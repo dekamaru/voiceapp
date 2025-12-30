@@ -8,10 +8,11 @@ mod audio;
 mod colors;
 mod config;
 mod icons;
-mod pages;
+mod view;
 mod widgets;
+mod state;
 
-use crate::application::Application;
+use crate::application::{Application};
 use colors::*;
 
 fn main() -> iced::Result {
@@ -28,7 +29,7 @@ fn main() -> iced::Result {
         )
     };
 
-    iced::application(Application::new, Application::update, Application::view)
+    iced::application(Application::new, Application::update, Application::render)
         .theme(theme)
         .subscription(Application::subscription)
         .title("Voiceapp")

@@ -1,22 +1,23 @@
 use opus::{Bitrate, Channels};
+use crate::error::SdkError;
 use crate::voice::opus_consts::{OPUS_ENCODING_BITRATE, OPUS_FRAME_SIZE, OPUS_SAMPLE_RATE};
 use crate::voice::models::VoiceData;
 
 /// Manages Opus encoding of voice packets
-pub struct Encoder {
+pub(crate) struct Encoder {
     encoder: opus::Encoder,
-    pub sequence: u32,
-    pub timestamp: u32,
+    sequence: u32,
+    timestamp: u32,
 }
 
 impl Encoder {
-    pub fn new() -> Result<Self, String> {
+    pub fn new() -> Result<Self, SdkError> {
         let mut encoder = opus::Encoder::new(OPUS_SAMPLE_RATE, Channels::Mono, opus::Application::Voip)
-            .map_err(|e| format!("opus error: {}", e.to_string()))?;
+            .map_err(|e| SdkError::EncoderError(format!("opus error: {}", e)))?;
 
         encoder
             .set_bitrate(Bitrate::Bits(OPUS_ENCODING_BITRATE))
-            .unwrap();
+            .map_err(|e| SdkError::EncoderError(e.to_string()))?;
 
         Ok(Encoder {
             encoder,
@@ -26,12 +27,12 @@ impl Encoder {
     }
 
     /// Encode audio samples to Opus format
-    pub fn encode(&mut self, samples: &[f32]) -> Result<VoiceData, String> {
-        assert!(
-            samples.len() <= OPUS_FRAME_SIZE as usize,
-            "Samples must be <= {} samples",
-            OPUS_FRAME_SIZE
-        );
+    pub fn encode(&mut self, samples: &[f32]) -> Result<VoiceData, SdkError> {
+        if samples.len() > OPUS_FRAME_SIZE as usize {
+            return Err(SdkError::InvalidInput(
+                format!("samples ({}) exceed frame size ({})", samples.len(), OPUS_FRAME_SIZE)
+            ));
+        }
 
         // Pad with zeros to reach frame size
         let mut padded_samples = samples.to_vec();
@@ -43,7 +44,7 @@ impl Encoder {
         let encoded_size = self
             .encoder
             .encode_float(&padded_samples, &mut opus_frame)
-            .map_err(|e| format!("Failed to encode Opus frame: {:?}", e))?;
+            .map_err(|e| SdkError::EncoderError(format!("Failed to encode Opus frame: {:?}", e)))?;
         opus_frame.truncate(encoded_size);
 
         let packet = VoiceData {

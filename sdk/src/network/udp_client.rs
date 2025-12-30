@@ -7,7 +7,7 @@ use tokio::sync::oneshot;
 use tracing::{debug, error};
 use voiceapp_protocol::Packet;
 
-use crate::error::ClientError;
+use crate::error::SdkError;
 
 /// Default timeout for request/response operations (per attempt)
 const REQUEST_TIMEOUT_SECS: u64 = 5;
@@ -51,17 +51,17 @@ impl UdpClient {
     }
 
     /// Connect UDP socket to server and spawn handler
-    pub async fn connect(&self, addr: &str) -> Result<(), ClientError> {
+    pub async fn connect(&self, addr: &str) -> Result<(), SdkError> {
         // Create UDP socket (bind to any available port)
         let socket = UdpSocket::bind("0.0.0.0:0")
             .await
-            .map_err(|e| ClientError::ConnectionFailed(format!("UDP bind failed: {}", e)))?;
+            .map_err(|e| SdkError::ConnectionFailed(format!("UDP bind failed: {}", e)))?;
 
         // Connect socket to server address
         socket
             .connect(addr)
             .await
-            .map_err(|e| ClientError::ConnectionFailed(format!("UDP connect failed: {}", e)))?;
+            .map_err(|e| SdkError::ConnectionFailed(format!("UDP connect failed: {}", e)))?;
 
         debug!("UDP connected to {}", addr);
 
@@ -74,13 +74,13 @@ impl UdpClient {
         &self,
         request: Packet,
         decoder: F,
-    ) -> Result<T, ClientError>
+    ) -> Result<T, SdkError>
     where
         F: Fn(Packet) -> Result<T, String>,
     {
         // Extract request_id from the packet
         let request_id = request.request_id()
-            .ok_or_else(|| ClientError::ConnectionFailed("Packet does not have request_id".to_string()))?;
+            .ok_or_else(|| SdkError::ConnectionFailed("Packet does not have request_id".to_string()))?;
 
         for attempt in 1..=MAX_RETRY_ATTEMPTS {
             debug!(
@@ -98,7 +98,7 @@ impl UdpClient {
             self.send_tx
                 .send(request.encode())
                 .await
-                .map_err(|_| ClientError::Disconnected)?;
+                .map_err(|_| SdkError::Disconnected)?;
 
             // Wait for response with timeout
             let timeout_result = tokio::time::timeout(
@@ -113,12 +113,12 @@ impl UdpClient {
                     // Clean up pending request
                     self.pending_requests.remove(&request_id);
                     return decoder(packet)
-                        .map_err(|e| ClientError::ConnectionFailed(e));
+                        .map_err(SdkError::ConnectionFailed);
                 }
                 Ok(Err(_)) => {
                     // Oneshot channel closed (handler stopped)
                     self.pending_requests.remove(&request_id);
-                    return Err(ClientError::Disconnected);
+                    return Err(SdkError::Disconnected);
                 }
                 Err(_) => {
                     debug!("[UDP] Request timeout on attempt {}", attempt);
@@ -131,7 +131,7 @@ impl UdpClient {
             }
         }
 
-        Err(ClientError::Timeout(format!(
+        Err(SdkError::Timeout(format!(
             "UDP request failed after {} attempts",
             MAX_RETRY_ATTEMPTS
         )))

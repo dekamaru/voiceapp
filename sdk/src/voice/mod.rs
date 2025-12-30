@@ -1,8 +1,8 @@
 pub mod decoder;
-pub mod encoder;
-pub mod input_pipeline;
-pub mod resampler;
-mod neteq;
-mod models;
-mod opus_consts;
-pub mod io_manager;
+pub(crate) mod encoder;
+pub(crate) mod input_pipeline;
+pub(crate) mod resampler;
+pub(crate) mod neteq;
+pub(crate) mod models;
+pub(crate) mod opus_consts;
+pub(crate) mod io_manager;

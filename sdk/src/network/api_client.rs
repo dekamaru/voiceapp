@@ -2,12 +2,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 use voiceapp_protocol::Packet;
 
-use crate::error::ClientError;
+use crate::error::SdkError;
 use super::tcp_client::TcpClient;
 use super::udp_client::UdpClient;
 
 /// ServerApi handles all request/response communication with the server
-pub struct ApiClient {
+pub(crate) struct ApiClient {
     tcp_client: TcpClient,
     udp_client: UdpClient,
     request_id_counter: AtomicU64,
@@ -29,8 +29,8 @@ impl ApiClient {
     }
 
     /// Authenticate with management server via TCP
-    /// Returns the voice_token needed for UDP voice authentication
-    pub async fn authenticate_management(&self, username: &str) -> Result<u64, ClientError> {
+    /// Returns the user_id and voice_token needed for UDP voice authentication
+    pub async fn authenticate_management(&self, username: &str) -> Result<(u64, u64), SdkError> {
         let request_id = self.next_request_id();
         let request = Packet::LoginRequest {
             request_id,
@@ -51,15 +51,13 @@ impl ApiClient {
             )
             .await?;
 
-        let (user_id, voice_token) = response;
+        info!("[Management server] Authenticated, user_id={}", response.0);
 
-        info!("[Management server] Authenticated, user_id={}", user_id);
-
-        Ok(voice_token)
+        Ok(response)
     }
 
     /// Authenticate with voice server via UDP
-    pub async fn authenticate_voice(&self, voice_token: u64) -> Result<(), ClientError> {
+    pub async fn authenticate_voice(&self, voice_token: u64) -> Result<(), SdkError> {
         let request_id = self.next_request_id();
         let request = Packet::VoiceAuthRequest { request_id, voice_token };
 
@@ -78,7 +76,7 @@ impl ApiClient {
             .await?;
 
         if !success {
-            return Err(ClientError::ConnectionFailed(
+            return Err(SdkError::ConnectionFailed(
                 "Voice auth denied".to_string(),
             ));
         }
@@ -89,7 +87,7 @@ impl ApiClient {
     }
 
     /// Join voice channel
-    pub async fn join_channel(&self) -> Result<(), ClientError> {
+    pub async fn join_channel(&self) -> Result<(), SdkError> {
         let request_id = self.next_request_id();
         let request = Packet::JoinVoiceChannelRequest { request_id };
 
@@ -99,7 +97,7 @@ impl ApiClient {
     }
 
     /// Leave voice channel
-    pub async fn leave_channel(&self) -> Result<(), ClientError> {
+    pub async fn leave_channel(&self) -> Result<(), SdkError> {
         let request_id = self.next_request_id();
         let request = Packet::LeaveVoiceChannelRequest { request_id };
 
@@ -109,7 +107,7 @@ impl ApiClient {
     }
 
     /// Send chat message
-    pub async fn send_message(&self, message: &str) -> Result<(), ClientError> {
+    pub async fn send_message(&self, message: &str) -> Result<(), SdkError> {
         let request_id = self.next_request_id();
         let request = Packet::ChatMessageRequest {
             request_id,
@@ -122,7 +120,8 @@ impl ApiClient {
     }
 
     /// Send mute state (event, no response expected)
-    pub async fn send_mute_state(&self, user_id: u64, is_muted: bool) -> Result<(), ClientError> {
+    pub async fn send_mute_state(&self, user_id: u64, is_muted: bool) -> Result<(), SdkError> {
+        // TODO: this is bad from security perspective and we need to get rid of event as request
         let packet = Packet::UserMuteState { user_id, is_muted };
 
         self.tcp_client.send_event(packet).await?;

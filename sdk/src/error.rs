@@ -1,23 +1,24 @@
-/// Errors that can occur with VoiceClient
-#[derive(Debug, Clone)]
-pub enum ClientError {
+use thiserror::Error;
+
+/// SDK error type
+#[derive(Debug, Clone, Error)]
+pub enum SdkError {
+    #[error("connection failed: {0}")]
     ConnectionFailed(String),
+    #[error("disconnected from server")]
     Disconnected,
+    #[error("timeout: {0}")]
     Timeout(String),
-    SystemError(String),
-    VoiceInputOutputManagerError(String),
+    #[error("encoder error: {0}")]
+    EncoderError(String),
+    #[error("decoder error: {0}")]
+    DecoderError(String),
+    #[error("resampler error: {0}")]
+    ResamplerError(String),
+    #[error("lock error")]
+    LockError,
+    #[error("channel closed")]
+    ChannelClosed,
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
 }
-
-impl std::fmt::Display for ClientError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ClientError::ConnectionFailed(msg) => write!(f, "Connection failed: {}", msg),
-            ClientError::Disconnected => write!(f, "Disconnected from server"),
-            ClientError::Timeout(msg) => write!(f, "Timeout exceeded {}", msg),
-            ClientError::SystemError(msg) => write!(f, "System error: {}", msg),
-            ClientError::VoiceInputOutputManagerError(msg) => write!(f, "Voice I/O manager error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for ClientError {}

@@ -1,9 +1,10 @@
-pub mod tcp_client;
-pub mod udp_client;
-pub mod event_handler;
-pub mod api_client;
+pub(crate) mod tcp_client;
+pub(crate) mod udp_client;
+pub(crate) mod event_handler;
+pub(crate) mod api_client;
 
-pub use tcp_client::TcpClient;
-pub use udp_client::UdpClient;
-pub use event_handler::{EventHandler, ClientEvent};
-pub use api_client::ApiClient;
+pub use event_handler::ClientEvent;
+pub(crate) use tcp_client::TcpClient;
+pub(crate) use udp_client::UdpClient;
+pub(crate) use event_handler::EventHandler;
+pub(crate) use api_client::ApiClient;

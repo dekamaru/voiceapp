@@ -1,22 +1,13 @@
 use rubato::{FftFixedIn, Resampler};
-use thiserror::Error;
+use crate::error::SdkError;
 
 /// Audio resampler for converting between sample rates
-pub struct AudioResampler {
+pub(crate) struct AudioResampler {
     /// FFT-based resampler
     resampler: FftFixedIn<f32>,
-    
+
     /// Pre-allocated output buffer for zero-allocation resampling
     output_buffer: Vec<Vec<f32>>,
-}
-
-#[derive(Debug, Clone, Error)]
-pub enum ResamplerError {
-    #[error("Resampler initialization error: {0}")]
-    InitializationError(String),
-
-    #[error("Resampling error: {0}")]
-    ResamplingError(String),
 }
 
 impl AudioResampler {
@@ -30,14 +21,14 @@ impl AudioResampler {
         source_sample_rate: u32,
         target_sample_rate: u32,
         frame_size: u32,
-    ) -> Result<Self, ResamplerError> {
+    ) -> Result<Self, SdkError> {
         let resampler = FftFixedIn::<f32>::new(
             source_sample_rate as usize,
             target_sample_rate as usize,
             frame_size as usize,
             2, // sub_chunks (quality/performance balance)
             1, // mono channel
-        ).map_err(|e| ResamplerError::InitializationError(
+        ).map_err(|e| SdkError::ResamplerError(
             format!("Failed to create resampler: {}", e)
         ))?;
 
@@ -57,10 +48,10 @@ impl AudioResampler {
     ///
     /// # Returns
     /// Resampled audio samples at target sample rate
-    pub fn resample(&mut self, input: Vec<f32>) -> Result<Vec<f32>, ResamplerError> {
+    pub fn resample(&mut self, input: Vec<f32>) -> Result<Vec<f32>, SdkError> {
         let (_, resampled_size) = self.resampler
             .process_into_buffer(&[&input], &mut self.output_buffer, None)
-            .map_err(|e| ResamplerError::ResamplingError(
+            .map_err(|e| SdkError::ResamplerError(
                 format!("Resampling failed: {}", e)
             ))?;
 

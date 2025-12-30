@@ -7,7 +7,7 @@ use tokio::sync::oneshot;
 use tracing::{debug, error};
 use voiceapp_protocol::Packet;
 
-use crate::error::ClientError;
+use crate::error::SdkError;
 
 /// Default timeout for request/response operations
 const REQUEST_TIMEOUT_SECS: u64 = 5;
@@ -43,12 +43,12 @@ impl TcpClient {
     }
 
     /// Connect to TCP server and spawn handler
-    pub async fn connect(&self, addr: &str) -> Result<(), ClientError> {
+    pub async fn connect(&self, addr: &str) -> Result<(), SdkError> {
         debug!("TCP connect to {}", addr);
         let socket = tokio::time::timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), TcpStream::connect(addr))
             .await
-            .map_err(|_| ClientError::ConnectionFailed("Operation timed out".to_string()))?
-            .map_err(|e| ClientError::ConnectionFailed(e.to_string()))?;
+            .map_err(|_| SdkError::ConnectionFailed("Operation timed out".to_string()))?
+            .map_err(|e| SdkError::ConnectionFailed(e.to_string()))?;
 
         debug!("TCP connected to {}", addr);
 
@@ -60,7 +60,7 @@ impl TcpClient {
     pub async fn send_event(
         &self,
         packet: Packet,
-    ) -> Result<(), ClientError> {
+    ) -> Result<(), SdkError> {
         // Encode packet
         let encoded = packet.encode();
 
@@ -68,7 +68,7 @@ impl TcpClient {
         self.send_tx
             .send((encoded, None))
             .await
-            .map_err(|_| ClientError::Disconnected)?;
+            .map_err(|_| SdkError::Disconnected)?;
 
         Ok(())
     }
@@ -77,10 +77,10 @@ impl TcpClient {
     pub async fn send_request(
         &self,
         request: Packet,
-    ) -> Result<Packet, ClientError> {
+    ) -> Result<Packet, SdkError> {
         // Extract request_id from the packet
         let request_id = request.request_id()
-            .ok_or_else(|| ClientError::ConnectionFailed("Packet does not have request_id".to_string()))?;
+            .ok_or_else(|| SdkError::ConnectionFailed("Packet does not have request_id".to_string()))?;
 
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -91,7 +91,7 @@ impl TcpClient {
         self.send_tx
             .send((encoded, Some((request_id, response_tx))))
             .await
-            .map_err(|_| ClientError::Disconnected)?;
+            .map_err(|_| SdkError::Disconnected)?;
 
         // Wait for response with timeout
         self.wait_for_response(response_rx, request_id)
@@ -103,12 +103,12 @@ impl TcpClient {
         &self,
         request: Packet,
         decoder: F,
-    ) -> Result<T, ClientError>
+    ) -> Result<T, SdkError>
     where
         F: Fn(Packet) -> Result<T, String>,
     {
         let packet = self.send_request(request).await?;
-        decoder(packet).map_err(|e| ClientError::ConnectionFailed(e))
+        decoder(packet).map_err(SdkError::ConnectionFailed)
     }
 
     /// Spawn TCP handler task
@@ -246,13 +246,13 @@ impl TcpClient {
         &self,
         response_rx: oneshot::Receiver<Packet>,
         request_id: u64,
-    ) -> Result<Packet, ClientError> {
+    ) -> Result<Packet, SdkError> {
         let timeout = tokio::time::timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), response_rx);
 
         match timeout.await {
             Ok(Ok(packet)) => Ok(packet),
-            Ok(Err(_)) => Err(ClientError::Disconnected),
-            Err(_) => Err(ClientError::Timeout(format!(
+            Ok(Err(_)) => Err(SdkError::Disconnected),
+            Err(_) => Err(SdkError::Timeout(format!(
                 "request_id {}",
                 request_id
             ))),

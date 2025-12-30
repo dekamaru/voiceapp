@@ -1,12 +1,13 @@
 use async_channel::{Receiver, Sender};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use voiceapp_protocol::Packet;
-use crate::voice::encoder::{Encoder};
+use crate::error::SdkError;
+use crate::voice::encoder::Encoder;
 use crate::voice::opus_consts::{OPUS_FRAME_SIZE, OPUS_SAMPLE_RATE};
 use crate::voice::resampler::AudioResampler;
 
 /// Voice input pipeline: resamples, buffers, and encodes audio to Opus
-pub struct InputPipeline;
+pub(crate) struct InputPipeline;
 
 impl InputPipeline {
     /// Create a new VoiceInputPipeline with external channels
@@ -14,15 +15,15 @@ impl InputPipeline {
         target_sample_rate: u32,
         voice_input_rx: Receiver<Vec<f32>>,
         udp_send_tx: Sender<Vec<u8>>,
-    ) -> Result<Self, String> { // TODO: error handling
-        let encoder = Encoder::new().map_err(|e| format!("Encoder creation error: {}", e))?;
+    ) -> Result<Self, SdkError> {
+        let encoder = Encoder::new()?;
 
         let resampler = if target_sample_rate != OPUS_SAMPLE_RATE {
             Some(AudioResampler::new(
                 target_sample_rate,
                 OPUS_SAMPLE_RATE,
                 OPUS_FRAME_SIZE
-            ).map_err(|e| format!("AudioResampler creation error: {}", e))?)
+            )?)
         } else {
             None
         };
@@ -105,15 +106,10 @@ impl InputPipeline {
         let mut resample_buffer = Vec::with_capacity(RESAMPLER_CHUNK_SIZE * 2);
         let mut encode_buffer = Vec::with_capacity(OPUS_FRAME_SIZE as usize * 2);
 
-        loop {
-            match input_rx.recv().await {
-                Ok(frame) => {
-                    Self::resample(&frame, &mut resampler, &mut resample_buffer, &mut encode_buffer);
-                    if !Self::encode_and_send(&mut encoder, &mut encode_buffer, &udp_send_tx).await {
-                        return;
-                    }
-                }
-                Err(_) => { break; }
+        while let Ok(frame) = input_rx.recv().await {
+            Self::resample(&frame, &mut resampler, &mut resample_buffer, &mut encode_buffer);
+            if !Self::encode_and_send(&mut encoder, &mut encode_buffer, &udp_send_tx).await {
+                return;
             }
         }
 

@@ -1,11 +1,24 @@
-pub mod network;
-pub mod voice;
-pub mod client;
-pub mod error;
+//! VoiceApp SDK - Voice communication client library
+//!
+//! ## Example
+//! ```no_run
+//! use voiceapp_sdk::{Client, SdkError};
+//!
+//! async fn example() -> Result<(), SdkError> {
+//!     let client = Client::new();
+//!     client.connect("mgmt:8080", "voice:9090", "user").await?;
+//!     client.join_channel().await?;
+//!     Ok(())
+//! }
+//! ```
 
-pub use network::{ApiClient, ClientEvent, TcpClient, UdpClient};
+mod network;
+mod voice;
+mod client;
+mod error;
+
 pub use client::Client;
-pub use voice::decoder::{Decoder, DecoderError};
-pub use voice::encoder::Encoder;
-pub use voice::input_pipeline::InputPipeline;
-pub use voiceapp_protocol::{self, ParticipantInfo};
+pub use error::SdkError;
+pub use network::ClientEvent;
+pub use voice::decoder::Decoder;
+pub use voiceapp_protocol::ParticipantInfo;

@@ -1,18 +1,12 @@
 use neteq::codec::{AudioDecoder, OpusDecoder};
-use thiserror::Error;
+use crate::error::SdkError;
 use crate::voice::resampler::AudioResampler;
 
 /// Custom decoder that wraps Opus decoding with optional resampling
-pub struct OpusResamplingDecoder {
+pub(crate) struct OpusResamplingDecoder {
     opus_decoder: OpusDecoder,
     resampler: Option<AudioResampler>,
     target_sample_rate: u32,
-}
-
-#[derive(Debug, Clone, Error)]
-pub enum OpusResamplingDecoderError {
-    #[error("Opus resampling decoder initialization error: {0}")]
-    InitializationError(String),
 }
 
 impl OpusResamplingDecoder {
@@ -21,19 +15,14 @@ impl OpusResamplingDecoder {
         target_sample_rate: u32,
         channels: u8,
         frame_size: u32,
-    ) -> Result<Self, OpusResamplingDecoderError> {
+    ) -> Result<Self, SdkError> {
         // Create Opus decoder at 48kHz
-        let opus_decoder = OpusDecoder::new(source_sample_rate, channels).map_err(|e| {
-            OpusResamplingDecoderError::InitializationError(e.to_string())
-        })?;
+        let opus_decoder = OpusDecoder::new(source_sample_rate, channels)
+            .map_err(|e| SdkError::DecoderError(e.to_string()))?;
 
         // Create resampler if needed
         let resampler = if target_sample_rate != source_sample_rate {
-            Some(
-                AudioResampler::new(source_sample_rate, target_sample_rate, frame_size).map_err(|e| {
-                    OpusResamplingDecoderError::InitializationError(e.to_string())
-                })?
-            )
+            Some(AudioResampler::new(source_sample_rate, target_sample_rate, frame_size)?)
         } else {
             None
         };
@@ -64,4 +53,6 @@ impl AudioDecoder for OpusResamplingDecoder {
     }
 }
 
+// SAFETY: OpusResamplingDecoder is only accessed through a Mutex,
+// ensuring exclusive access. Internal types are Send-safe.
 unsafe impl Send for OpusResamplingDecoder {}

@@ -1,4 +1,4 @@
-use crate::application::{Message, Page, VoiceCommand, VoiceCommandResult};
+use crate::application::{Message, ViewType};
 use crate::colors::{
     color_error, text_primary, text_secondary, text_selection, DARK_CONTAINER_BACKGROUND,
 };
@@ -10,10 +10,14 @@ use iced::widget::{container, space, stack, text, text_input};
 use iced::{border, Background, Border, Color, Element, Font, Length, Padding, Task};
 use std::sync::Arc;
 use arc_swap::ArcSwap;
+use tracing::info;
 use crate::config::AppConfig;
+use crate::state::voice_client::{VoiceCommand, VoiceCommandResult};
+use crate::view::view::View;
 
 #[derive(Default)]
 pub struct LoginPage {
+    config: Arc<ArcSwap<AppConfig>>,
     voice_url: String,
     username: String,
     form_filled: bool,
@@ -35,11 +39,12 @@ impl Into<Message> for LoginPageMessage {
 
 impl LoginPage {
     pub fn new(config: Arc<ArcSwap<AppConfig>>) -> Self {
-        let config = config.load();
+        let loaded_config = config.load();
 
         let mut page = Self {
-            voice_url: config.server.address.clone(),
-            username: config.server.username.clone(),
+            config,
+            voice_url: loaded_config.server.address.clone(),
+            username: loaded_config.server.username.clone(),
             form_filled: false,
             login_error: "".to_string(),
         };
@@ -143,7 +148,27 @@ impl LoginPage {
     }
 }
 
-impl Page for LoginPage {
+impl View for LoginPage {
+    fn on_open(&mut self) -> Task<Message> {
+        let config = self.config.load();
+
+        if config.server.is_credentials_filled() {
+            info!("Credentials read from config, performing auto login");
+
+            Task::done(
+                Message::ExecuteVoiceCommand(
+                    VoiceCommand::Connect {
+                        management_addr: format!("{}:9001", config.server.address),
+                        voice_addr: format!("{}:9002", config.server.address),
+                        username: config.server.username.clone(),
+                    }
+                )
+            )
+        } else {
+            Task::none()
+        }
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::LoginPage(msg) => {
@@ -154,7 +179,9 @@ impl Page for LoginPage {
                         }
 
                         self.voice_url = content;
-                        self.form_filled = self.is_form_filled()
+                        self.form_filled = self.is_form_filled();
+
+                        Task::none()
                     }
                     LoginPageMessage::UsernameChanged(content) => {
                         if !self.login_error.is_empty() {
@@ -162,34 +189,35 @@ impl Page for LoginPage {
                         }
 
                         self.username = content;
-                        self.form_filled = self.is_form_filled()
+                        self.form_filled = self.is_form_filled();
+
+                        Task::none()
                     }
                     LoginPageMessage::LoginSubmitted => {
                         if self.form_filled {
                             // TODO: inputs should be blocked (buttons as well)
-                            return Task::done(Message::ExecuteVoiceCommand(
+                            Task::done(Message::ExecuteVoiceCommand(
                                 VoiceCommand::Connect {
                                     management_addr: format!("{}:9001", self.voice_url),
                                     voice_addr: format!("{}:9002", self.voice_url),
                                     username: self.username.clone(),
                                 },
-                            ));
+                            ))
+                        } else {
+                            Task::none()
                         }
                     }
                 }
             }
             Message::VoiceCommandResult(VoiceCommandResult::Connect(result)) => match result {
-                Err(err) => {
-                    self.login_error = err;
-                }
-                _ => {}
+                Ok(_) => { Task::done(Message::SwitchView(ViewType::Room)) },
+                Err(err) => { self.login_error = err; Task::none() }
             },
-            _ => {}
+            _ => Task::none()
         }
-        Task::none()
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    fn render(&self) -> Element<'_, Message> {
         self.login_screen().into()
     }
 }
