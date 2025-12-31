@@ -5,11 +5,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use voiceapp_protocol::{Packet, ParticipantInfo, ProtocolError};
+use crate::config::{MAX_USERNAME_LEN, PACKET_BUFFER_SIZE};
+use crate::error::ServerError;
 use crate::management::broadcast::BroadcastMessage;
-use crate::management::event::Event;
-use crate::management::event::Event::{UserJoinedVoice, UserLeftVoice};
+use crate::event::Event;
+use crate::event::Event::{VoiceJoined, VoiceLeft};
 use crate::management::user::User;
 
 pub struct UserHandler {
@@ -31,8 +33,8 @@ impl UserHandler {
         Self { server_users: users, socket, address, broadcast_channel, events_channel }
     }
 
-    pub async fn handle(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut read_buf = vec![0u8; 4096];
+    pub async fn handle(&mut self) -> Result<(), ServerError> {
+        let mut read_buf = vec![0u8; PACKET_BUFFER_SIZE];
         let mut packet_buffer = Vec::new(); // Accumulates partial packets
         let mut broadcast_rx = self.broadcast_channel.subscribe();
 
@@ -68,7 +70,7 @@ impl UserHandler {
                                         break;
                                     }
                                     Err(e) => {
-                                        error!("[{}] Protocol error: {}, clearing buffer", self.address, e);
+                                        warn!("[{}] Protocol error: {}", self.address, e);
                                         packet_buffer.clear();
                                         break;
                                     }
@@ -93,7 +95,7 @@ impl UserHandler {
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(_)) => {
-                            error!("[{}] Broadcast channel lagged, skipping messages", self.address);
+                            warn!("[{}] Broadcast channel lagged", self.address);
                         }
                         Err(broadcast::error::RecvError::Closed) => {
                             error!("[{}] Broadcast channel closed, skipping messages", self.address);
@@ -106,7 +108,7 @@ impl UserHandler {
     }
 
     /// Handle a decoded packet from client
-    async fn handle_packet(&mut self, packet: Packet) -> Result<(), Box<dyn std::error::Error>> {
+    async fn handle_packet(&mut self, packet: Packet) -> Result<(), ServerError> {
         match packet {
             Packet::LoginRequest { request_id, username } => {
                 self.handle_login_request(request_id, username).await
@@ -124,7 +126,7 @@ impl UserHandler {
                 self.handle_user_mute_state(user_id, is_muted).await
             }
             _ => {
-                error!("[{}] Unexpected packet type: {:?}", self.address, packet);
+                warn!("[{}] Unexpected packet: {:?}", self.address, packet);
                 Ok(())
             }
         }
@@ -133,15 +135,10 @@ impl UserHandler {
     /// Handle broadcast message: filter and send to client if appropriate
     async fn handle_broadcast_message(
         &mut self,
-        message: BroadcastMessage
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let should_send = match message.sender_addr {
-            Some(sender) => { message.for_all || sender != self.address }
-            None => true,
-        };
-
-        if should_send {
-            self.socket.write_all(&message.packet_data).await?;
+        message: BroadcastMessage,
+    ) -> Result<(), ServerError> {
+        if message.should_send_to(self.address) {
+            self.socket.write_all(message.data()).await?;
             self.socket.flush().await?;
         }
 
@@ -153,13 +150,25 @@ impl UserHandler {
         &mut self,
         request_id: u64,
         username: String,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), ServerError> {
+        // Validate username
+        if username.is_empty() || username.len() > MAX_USERNAME_LEN {
+            let response = Packet::LoginResponse {
+                request_id,
+                id: 0,
+                voice_token: 0,
+                participants: vec![],
+            };
+            self.socket.write_all(&response.encode()).await?;
+            self.socket.flush().await?;
+            return Ok(());
+        }
 
         let (user_id, voice_token) = if let Some(mut user) = self.server_users.get_mut(&self.address) {
             user.username = Some(username.clone());
             (user.id, user.token)
         } else {
-            return Err("User not found in users map".into());
+            return Err(ServerError::UserNotFound(self.address));
         };
 
         // Collect current participants for login response
@@ -188,14 +197,7 @@ impl UserHandler {
         let joined_event = Packet::UserJoinedServer {
             participant: ParticipantInfo::new(user_id, username.clone(), false, false),
         };
-        let broadcast_msg = BroadcastMessage {
-            sender_addr: Some(self.address),
-            for_all: false,
-            packet_data: joined_event.encode(),
-        };
-
-        // Ignore broadcast send errors (they might happen if no subscribers)
-        let _ = self.broadcast_channel.send(broadcast_msg);
+        let _ = self.broadcast_channel.send(BroadcastMessage::excluding(self.address, &joined_event));
 
         debug!(
             "[{}] User logged in: id={}, username={}",
@@ -209,7 +211,7 @@ impl UserHandler {
     async fn handle_join_voice_channel_request(
         &mut self,
         request_id: u64,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), ServerError> {
         // Get user ID and update in_voice state
         let user_id = {
             if let Some(mut user) = self.server_users.get_mut(&self.address) {
@@ -218,7 +220,7 @@ impl UserHandler {
                 user.is_muted = false; // by default user is not muted
                 user_id
             } else {
-                return Err("User not found in users map".into());
+                return Err(ServerError::UserNotFound(self.address));
             }
         };
 
@@ -227,16 +229,11 @@ impl UserHandler {
         self.socket.write_all(&response.encode()).await?;
         self.socket.flush().await?;
 
-        let _ = self.events_channel.send(UserJoinedVoice {id: user_id});
+        let _ = self.events_channel.send(VoiceJoined { id: user_id });
 
         // Broadcast user joined voice event to all other clients (exclude caller)
         let joined_event = Packet::UserJoinedVoice { user_id };
-        let broadcast_msg = BroadcastMessage {
-            sender_addr: Some(self.address),
-            for_all: false,
-            packet_data: joined_event.encode(),
-        };
-        let _ = self.broadcast_channel.send(broadcast_msg);
+        let _ = self.broadcast_channel.send(BroadcastMessage::excluding(self.address, &joined_event));
 
         debug!("[{}] User joined voice channel: id={}", self.address, user_id);
 
@@ -247,7 +244,7 @@ impl UserHandler {
     async fn handle_leave_voice_channel_request(
         &mut self,
         request_id: u64,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), ServerError> {
         // Get user ID and update in_voice state
         let user_id = {
             if let Some(mut user) = self.server_users.get_mut(&self.address) {
@@ -256,7 +253,7 @@ impl UserHandler {
                 user.is_muted = false;
                 user_id
             } else {
-                return Err("User not found in users map".into());
+                return Err(ServerError::UserNotFound(self.address));
             }
         };
 
@@ -265,16 +262,11 @@ impl UserHandler {
         self.socket.write_all(&response.encode()).await?;
         self.socket.flush().await?;
 
-        let _ = self.events_channel.send(UserLeftVoice {id: user_id});
+        let _ = self.events_channel.send(VoiceLeft { id: user_id });
+
         // Broadcast user left voice event to all other clients (exclude caller)
         let left_event = Packet::UserLeftVoice { user_id };
-        let broadcast_msg = BroadcastMessage {
-            sender_addr: Some(self.address),
-            for_all: false,
-            packet_data: left_event.encode(),
-        };
-
-        let _ = self.broadcast_channel.send(broadcast_msg);
+        let _ = self.broadcast_channel.send(BroadcastMessage::excluding(self.address, &left_event));
 
         debug!("[{}] User left voice channel: id={}", self.address, user_id);
 
@@ -286,13 +278,13 @@ impl UserHandler {
         &mut self,
         request_id: u64,
         message: String,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), ServerError> {
         // Get user info
         let user_id = {
             if let Some(user) = self.server_users.get(&self.address) {
                 user.id
             } else {
-                return Err("User not found in users map".into());
+                return Err(ServerError::UserNotFound(self.address));
             }
         };
 
@@ -304,19 +296,14 @@ impl UserHandler {
         // Broadcast user sent message event to all clients (including sender)
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         let message_event = Packet::UserSentMessage {
             user_id,
             timestamp,
             message: message.clone(),
         };
-        let broadcast_msg = BroadcastMessage {
-            sender_addr: None,
-            for_all: true,
-            packet_data: message_event.encode(),
-        };
-        let _ = self.broadcast_channel.send(broadcast_msg);
+        let _ = self.broadcast_channel.send(BroadcastMessage::to_all(&message_event));
 
         debug!(
             "[{}] User sent message: id={}, len={}",
@@ -333,24 +320,19 @@ impl UserHandler {
         &mut self,
         user_id: u64,
         is_muted: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), ServerError> {
         // Update user's mute state
         {
             if let Some(mut user) = self.server_users.get_mut(&self.address) {
                 user.is_muted = is_muted;
             } else {
-                return Err("User not found in users map".into());
+                return Err(ServerError::UserNotFound(self.address));
             }
         }
 
         // Broadcast user mute state event to all clients (excluding sender)
         let mute_event = Packet::UserMuteState { user_id, is_muted };
-        let broadcast_msg = BroadcastMessage {
-            sender_addr: Some(self.address),
-            for_all: false,
-            packet_data: mute_event.encode(),
-        };
-        let _ = self.broadcast_channel.send(broadcast_msg);
+        let _ = self.broadcast_channel.send(BroadcastMessage::excluding(self.address, &mute_event));
 
         debug!(
             "[{}] User mute state changed: id={}, is_muted={}",
@@ -369,23 +351,12 @@ impl UserHandler {
         if let Some(user) = user_option {
             // Broadcast user left server event to all clients
             let left_event = Packet::UserLeftServer { user_id: user.id };
-            let broadcast_msg = BroadcastMessage {
-                sender_addr: None,
-                for_all: true,
-                packet_data: left_event.encode(),
-            };
-
-            let _ = self.broadcast_channel.send(broadcast_msg);
+            let _ = self.broadcast_channel.send(BroadcastMessage::to_all(&left_event));
 
             // If user was in voice channel, broadcast user left voice event
             if user.in_voice {
                 let left_voice_event = Packet::UserLeftVoice { user_id: user.id };
-                let broadcast_msg = BroadcastMessage {
-                    sender_addr: None,
-                    for_all: true,
-                    packet_data: left_voice_event.encode(),
-                };
-                let _ = self.broadcast_channel.send(broadcast_msg);
+                let _ = self.broadcast_channel.send(BroadcastMessage::to_all(&left_voice_event));
             }
 
             debug!(

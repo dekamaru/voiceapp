@@ -1,33 +1,38 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use dashmap::{DashMap};
+use dashmap::DashMap;
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc::{UnboundedReceiver};
-use tracing::{debug, error, info};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tracing::{debug, error, info, warn};
 use voiceapp_protocol::Packet;
-use crate::management::event::Event;
-use crate::voice::user::User;
+use crate::config::PACKET_BUFFER_SIZE;
+use crate::event::Event;
+use crate::voice::session::VoiceSession;
 
-/// VoiceRelayServer handles UDP voice packet relaying
-/// It depends on ManagementServer for user authentication and state
+/// VoiceRelayServer handles UDP voice packet relaying.
+/// It depends on ManagementServer for user authentication and state.
+#[derive(Debug)]
 pub struct VoiceRelayServer {
     events_channel: UnboundedReceiver<Event>,
-    users: DashMap<u64, User>,
+    sessions: DashMap<u64, VoiceSession>,
     ids_by_addresses: DashMap<SocketAddr, u64>, // Caching map for better performance in relay
 }
 
 impl VoiceRelayServer {
+    /// Creates a new VoiceRelayServer with the given event channel from ManagementServer.
+    #[must_use]
     pub fn new(events_channel: UnboundedReceiver<Event>) -> Self {
         VoiceRelayServer {
             events_channel,
-            users: DashMap::new(),
-            ids_by_addresses: DashMap::new()
+            sessions: DashMap::new(),
+            ids_by_addresses: DashMap::new(),
         }
     }
 
-    /// Start listening for UDP voice packets and relay them
-    pub async fn run(&mut self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let udp_socket = match UdpSocket::bind(addr).await {
+    /// Start listening for UDP voice packets and relay them on the given port.
+    pub async fn run(&mut self, port: u16) -> Result<(), crate::error::ServerError> {
+        let addr = format!("0.0.0.0:{}", port);
+        let udp_socket = match UdpSocket::bind(&addr).await {
             Ok(socket) => {
                 info!("VoiceRelayServer listening on {}", socket.local_addr()?);
                 Arc::new(socket)
@@ -38,7 +43,7 @@ impl VoiceRelayServer {
             }
         };
 
-        let mut buf = vec![0u8; 4096];
+        let mut buf = vec![0u8; PACKET_BUFFER_SIZE];
 
         loop {
             tokio::select! {
@@ -50,28 +55,27 @@ impl VoiceRelayServer {
                     }
                 }
 
-                // Handle user disconnect events from management server
+                // Handle events from management server
                 Some(event) = self.events_channel.recv() => {
                     match event {
-                        Event::UserJoinedServer { id, token } => {
-                            info!("Inserting user {} {}", id, token);
-                            self.users.insert(id, User {
+                        Event::UserConnected { id, token } => {
+                            self.sessions.insert(id, VoiceSession {
                                 token,
                                 in_voice: false,
-                                udp_address: None
+                                udp_address: None,
                             });
                         }
-                        Event::UserJoinedVoice { id } => {
-                            if let Some(mut user) = self.users.get_mut(&id) {
-                                user.in_voice = true;
+                        Event::VoiceJoined { id } => {
+                            if let Some(mut session) = self.sessions.get_mut(&id) {
+                                session.in_voice = true;
                             }
                         }
-                        Event::UserLeftVoice { id } => {
-                            if let Some(mut user) = self.users.get_mut(&id) {
-                                user.in_voice = false;
+                        Event::VoiceLeft { id } => {
+                            if let Some(mut session) = self.sessions.get_mut(&id) {
+                                session.in_voice = false;
                             }
                         }
-                        Event::UserLeftServer { id } => {
+                        Event::UserDisconnected { id } => {
                             let address = self.ids_by_addresses
                                 .iter()
                                 .find(|e| *e.value() == id)
@@ -81,7 +85,7 @@ impl VoiceRelayServer {
                                 self.ids_by_addresses.remove(&address);
                             }
 
-                            self.users.remove(&id);
+                            self.sessions.remove(&id);
                         }
                     }
                 }
@@ -99,29 +103,28 @@ impl VoiceRelayServer {
         match Packet::decode(packet_data) {
             Ok((packet, _)) => match packet {
                 Packet::VoiceAuthRequest { request_id, voice_token } => {
-                    let user_data = self
-                        .users
+                    let session_data = self
+                        .sessions
                         .iter()
                         .find(|e| e.value().token == voice_token)
                         .map(|e| (*e.key(), *e.value())); // Copy values, drop reference
 
-                    if let Some((user_id, user)) = user_data {
-                        self.authenticate(src_addr, user_id, user, request_id, voice_token, udp_socket).await;
+                    if let Some((user_id, session)) = session_data {
+                        self.authenticate(src_addr, user_id, session, request_id, voice_token, udp_socket).await;
                     } else {
-                        error!("VoiceAuthRequest received but no user token found");
+                        warn!("Auth failed: unknown token from {}", src_addr);
                     }
                 }
                 Packet::VoiceData { user_id: _, sequence, timestamp, data } => {
                     let user_id = self.ids_by_addresses.get(&src_addr).map(|e| *e.value());
                     if let Some(user_id) = user_id {
                         self.forward_voice_packet(user_id, sequence, timestamp, data, udp_socket).await;
-                    } else {
-                        error!("VoiceData received but no user found");
                     }
+                    // Silently ignore VoiceData from unknown addresses (race condition, not actionable)
                 }
-                _ => { error!("Received invalid packet type. Address: {:?}",src_addr); }
+                _ => { warn!("Invalid packet type from {}", src_addr); }
             },
-            Err(e) => { error!("Failed to parse packet from {}: {}", src_addr, e); }
+            Err(e) => { warn!("Malformed packet from {}: {}", src_addr, e); }
         }
     }
 
@@ -138,7 +141,7 @@ impl VoiceRelayServer {
         let packet = Packet::VoiceData { user_id, sequence, timestamp, data };
         let encoded_packet = packet.encode();
 
-        let recipients: Vec<SocketAddr> = self.users.iter()
+        let recipients: Vec<SocketAddr> = self.sessions.iter()
             .filter(|e| e.value().in_voice && *e.key() != user_id)
             .map(|e| e.value().udp_address.unwrap())
             .collect();
@@ -155,20 +158,18 @@ impl VoiceRelayServer {
         &self,
         src_addr: SocketAddr,
         user_id: u64,
-        mut user: User,
+        mut session: VoiceSession,
         request_id: u64,
         voice_token: u64,
         udp_socket: &Arc<UdpSocket>,
     ) {
-        info!("Received auth packet from {}", src_addr);
-
-        let token_valid = user.token == voice_token;
+        let token_valid = session.token == voice_token;
         if token_valid {
-            user.udp_address = Some(src_addr);
-            self.users.insert(user_id, user);
+            session.udp_address = Some(src_addr);
+            self.sessions.insert(user_id, session);
             self.ids_by_addresses.insert(src_addr, user_id);
         } else {
-            error!("Invalid token from {}", src_addr);
+            warn!("Invalid token from {}", src_addr);
         }
 
         // Send response back to client

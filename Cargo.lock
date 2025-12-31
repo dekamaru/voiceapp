@@ -4359,7 +4359,7 @@ dependencies = [
 
 [[package]]
 name = "voiceapp-frontend"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -4402,6 +4402,7 @@ version = "0.0.1"
 dependencies = [
  "dashmap",
  "rand 0.8.5",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
  "tracing-subscriber",

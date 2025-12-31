@@ -3,17 +3,18 @@ use rand::random;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::mpsc::{Sender};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::{error, info};
-use crate::management::event::Event;
+use crate::config::BROADCAST_CHANNEL_CAPACITY;
+use crate::event::Event;
 use crate::management::user::User;
-use crate::management::user_handler::UserHandler;
+use crate::management::handler::UserHandler;
 
 /// ManagementServer handles TCP connections, user login, presence management,
-/// and broadcasts events to all connected clients
+/// and broadcasts events to all connected clients.
+#[derive(Debug)]
 pub struct ManagementServer {
     users: Arc<DashMap<SocketAddr, User>>,
     next_user_id: Arc<AtomicU64>,
@@ -21,6 +22,8 @@ pub struct ManagementServer {
 }
 
 impl ManagementServer {
+    /// Creates a new ManagementServer and returns the event receiver for VoiceRelayServer.
+    #[must_use]
     pub fn new() -> (Self, UnboundedReceiver<Event>) {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
 
@@ -33,11 +36,12 @@ impl ManagementServer {
         (server, events_rx)
     }
 
-    /// Start the TCP listener and accept client connections
-    pub async fn run(&self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let listener = TcpListener::bind(addr).await?;
+    /// Start the TCP listener and accept client connections on the given port.
+    pub async fn run(&self, port: u16) -> Result<(), crate::error::ServerError> {
+        let addr = format!("0.0.0.0:{}", port);
+        let listener = TcpListener::bind(&addr).await?;
         let local_addr = listener.local_addr()?;
-        let (broadcast_tx, _) = broadcast::channel(1000);
+        let (broadcast_tx, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         info!("ManagementServer listening on {}", local_addr);
 
         loop {
@@ -48,12 +52,12 @@ impl ManagementServer {
             let events_tx = self.events_tx.clone();
 
             tokio::spawn(async move {
-                let _ = events_tx.send(Event::UserJoinedServer { id: user.id, token: user.token });
+                let _ = events_tx.send(Event::UserConnected { id: user.id, token: user.token });
 
                 let mut user_handler = UserHandler::new(
                     users,
                     socket,
-                    peer_addr.clone(),
+                    peer_addr,
                     broadcast_tx,
                     events_tx.clone(),
                 );
@@ -62,7 +66,7 @@ impl ManagementServer {
                     error!("[{}] Error: {}", peer_addr, e);
                 }
 
-                let _ = events_tx.send(Event::UserLeftServer { id: user.id });
+                let _ = events_tx.send(Event::UserDisconnected { id: user.id });
             });
         }
     }
