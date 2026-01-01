@@ -174,8 +174,11 @@ impl AudioManager {
     /// Play a notification sound (if notification player is initialized)
     pub fn play_notification(&self, sound_id: &str) {
         if let Some(player) = &self.notification_player {
-            let volume = self.app_config.load().audio.notification_volume;
-            player.play(sound_id, volume);
+            let config = self.app_config.load();
+            let master_volume = config.audio.output_device.volume as f32 / 100.0;
+            let notification_volume = config.audio.notification_volume as f32 / 100.0;
+            let effective_volume = (master_volume * notification_volume * 100.0) as u8;
+            player.play(sound_id, effective_volume);
         }
     }
 

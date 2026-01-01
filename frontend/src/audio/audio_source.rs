@@ -51,12 +51,13 @@ impl AudioSource for VolumeAdjustedSource {
     fn get_audio(&self) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
         let mut samples = self.inner.get_audio()?;
         let config = self.app_config.load();
+        let master_volume = config.audio.output_device.volume as f32 / 100.0;
         let user_volume = config.audio.users_volumes
             .get(&self.user_id)
             .copied()
-            .unwrap_or(100); // Default to 100% if not configured
-        
-        adjust_volume(&mut samples, user_volume as f32 / 100.0);
+            .unwrap_or(100) as f32 / 100.0;
+
+        adjust_volume(&mut samples, master_volume * user_volume);
 
         Ok(samples)
     }
