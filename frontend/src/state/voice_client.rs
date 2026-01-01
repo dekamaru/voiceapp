@@ -15,6 +15,7 @@ pub enum VoiceCommand {
     LeaveVoiceChannel,
     SendChatMessage(String),
     Ping,
+    GetVoiceStats,
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +25,7 @@ pub enum VoiceCommandResult {
     LeaveVoiceChannel(Result<(), String>),
     SendChatMessage(Result<(), String>),
     Ping(Result<u64, String>),  // RTT in milliseconds
+    VoiceStats(u64, u64),  // (bytes_sent, bytes_received)
 }
 
 pub struct VoiceClientState {
@@ -91,6 +93,10 @@ impl VoiceClientState {
                     ))
                 },
             ),
+            VoiceCommand::GetVoiceStats => {
+                let (sent, received) = client.get_voice_stats();
+                Task::done(Message::VoiceCommandResult(VoiceCommandResult::VoiceStats(sent, received)))
+            },
         }
     }
 }

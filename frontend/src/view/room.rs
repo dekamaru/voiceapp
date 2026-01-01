@@ -63,6 +63,8 @@ pub struct RoomPage {
     selected_user_settings: Option<u64>,
     overlay_visible: bool,
     ping_ms: Option<u64>,
+    bytes_sent: u64,
+    bytes_received: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +98,8 @@ impl RoomPage {
             selected_user_settings: None,
             overlay_visible: false,
             ping_ms: None,
+            bytes_sent: 0,
+            bytes_received: 0,
         }
     }
 
@@ -516,11 +520,30 @@ impl RoomPage {
             .unwrap_or(false)
     }
 
+    fn format_bytes(bytes: u64) -> String {
+        const KB: u64 = 1024;
+        const MB: u64 = KB * 1024;
+        const GB: u64 = MB * 1024;
+
+        if bytes >= GB {
+            format!("{:.1} GB", bytes as f64 / GB as f64)
+        } else if bytes >= MB {
+            format!("{:.1} MB", bytes as f64 / MB as f64)
+        } else if bytes >= KB {
+            format!("{:.1} KB", bytes as f64 / KB as f64)
+        } else {
+            format!("{} B", bytes)
+        }
+    }
+
     fn overlay<'a>(&self) -> Container<'a, Message> {
         let ping_text = match self.ping_ms {
             Some(ms) => format!("{} ms", ms),
             None => "---".to_string(),
         };
+
+        let sent_text = Self::format_bytes(self.bytes_sent);
+        let received_text = Self::format_bytes(self.bytes_received);
 
         const BOLD: Font = Font {
             family: Family::Name("Rubik"),
@@ -532,9 +555,16 @@ impl RoomPage {
         let overlay = container(
             column!(
                 row!(
-                    text("Ping:").size(14).font(BOLD), text(ping_text).size(14).color(text_primary())
+                    text("Ping:").size(14).font(BOLD),
+                    text(ping_text).size(14).color(text_primary())
                 ).spacing(4),
-            )
+                row!(
+                    text("↑").size(14).font(BOLD),
+                    text(sent_text).size(14).color(text_primary()),
+                    text("↓").size(14).font(BOLD),
+                    text(received_text).size(14).color(text_primary())
+                ).spacing(4),
+            ).spacing(4)
         )
             .padding(Padding { top: 8.0, right: 12.0, bottom: 8.0, left: 12.0 })
             .style(|_theme| Style {
@@ -636,6 +666,10 @@ impl View for RoomPage {
                             self.ping_ms = None;
                         }
                     }
+                }
+                VoiceCommandResult::VoiceStats(sent, received) => {
+                    self.bytes_sent = sent;
+                    self.bytes_received = received;
                 }
                 _ => {}
             },

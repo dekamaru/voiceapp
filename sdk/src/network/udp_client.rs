@@ -1,6 +1,7 @@
 use async_channel::{unbounded, Receiver, Sender};
 use dashmap::DashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
@@ -23,6 +24,8 @@ pub struct UdpClient {
     packet_tx: Sender<Packet>,
     packet_rx: Receiver<Packet>,
     pending_requests: Arc<DashMap<u64, oneshot::Sender<Packet>>>,
+    bytes_sent: Arc<AtomicU64>,
+    bytes_received: Arc<AtomicU64>,
 }
 
 impl UdpClient {
@@ -37,7 +40,17 @@ impl UdpClient {
             packet_tx,
             packet_rx,
             pending_requests: Arc::new(DashMap::new()),
+            bytes_sent: Arc::new(AtomicU64::new(0)),
+            bytes_received: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Get current stats (bytes_sent, bytes_received)
+    pub fn get_stats(&self) -> (u64, u64) {
+        (
+            self.bytes_sent.load(Ordering::Relaxed),
+            self.bytes_received.load(Ordering::Relaxed),
+        )
     }
 
     /// Get sender for outgoing packets
@@ -142,6 +155,8 @@ impl UdpClient {
         let send_rx = self.send_rx.clone();
         let packet_tx = self.packet_tx.clone();
         let pending_requests = self.pending_requests.clone();
+        let bytes_sent = self.bytes_sent.clone();
+        let bytes_received = self.bytes_received.clone();
 
         tokio::spawn(async move {
             let mut read_buf = [0u8; 4096];
@@ -150,7 +165,7 @@ impl UdpClient {
                 tokio::select! {
                     // Handle outgoing packets
                     result = send_rx.recv() => {
-                        if let Err(e) = Self::handle_outgoing(&socket, result).await {
+                        if let Err(e) = Self::handle_outgoing(&socket, result, &bytes_sent).await {
                             error!("UDP handler error: {}", e);
                             break;
                         }
@@ -162,7 +177,8 @@ impl UdpClient {
                             result,
                             &read_buf,
                             &packet_tx,
-                            &pending_requests
+                            &pending_requests,
+                            &bytes_received
                         ).await {
                             Ok(should_continue) => {
                                 if !should_continue {
@@ -186,13 +202,16 @@ impl UdpClient {
     async fn handle_outgoing(
         socket: &UdpSocket,
         recv_result: Result<Vec<u8>, async_channel::RecvError>,
+        bytes_sent: &Arc<AtomicU64>,
     ) -> Result<(), String> {
         match recv_result {
             Ok(packet) => {
+                let len = packet.len();
                 socket
                     .send(&packet)
                     .await
                     .map_err(|e| format!("Send error: {}", e))?;
+                bytes_sent.fetch_add(len as u64, Ordering::Relaxed);
                 Ok(())
             }
             Err(_) => Err("Send channel closed".to_string()),
@@ -205,6 +224,7 @@ impl UdpClient {
         read_buf: &[u8],
         packet_tx: &Sender<Packet>,
         pending_requests: &Arc<DashMap<u64, oneshot::Sender<Packet>>>,
+        bytes_received: &Arc<AtomicU64>,
     ) -> Result<bool, String> {
         match read_result {
             Ok(0) => {
@@ -212,6 +232,7 @@ impl UdpClient {
                 Ok(false)
             }
             Ok(n) => {
+                bytes_received.fetch_add(n as u64, Ordering::Relaxed);
                 // Parse incoming packet
                 let (packet, _size) = Packet::decode(&read_buf[..n])
                     .map_err(|e| format!("Parse error: {}", e))?;

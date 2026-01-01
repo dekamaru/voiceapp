@@ -120,4 +120,9 @@ impl Client {
     pub async fn ping(&self) -> Result<u64, SdkError> {
         self.api_client.ping().await
     }
+
+    /// Get voice stats (bytes_sent, bytes_received)
+    pub fn get_voice_stats(&self) -> (u64, u64) {
+        self.udp_client.get_stats()
+    }
 }
