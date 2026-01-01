@@ -122,6 +122,9 @@ impl UserHandler {
             Packet::ChatMessageRequest { request_id, message } => {
                 self.handle_chat_message_request(request_id, message).await
             }
+            Packet::PingRequest { request_id } => {
+                self.handle_ping_request(request_id).await
+            }
             Packet::UserMuteState { user_id, is_muted } => {
                 self.handle_user_mute_state(user_id, is_muted).await
             }
@@ -312,6 +315,14 @@ impl UserHandler {
             message.len()
         );
 
+        Ok(())
+    }
+
+    /// Handle ping request: immediately respond with PingResponse
+    async fn handle_ping_request(&mut self, request_id: u64) -> Result<(), ServerError> {
+        let response = Packet::PingResponse { request_id };
+        self.socket.write_all(&response.encode()).await?;
+        self.socket.flush().await?;
         Ok(())
     }
 

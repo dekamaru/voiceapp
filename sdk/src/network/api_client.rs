@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 use tracing::info;
 use voiceapp_protocol::Packet;
 
@@ -127,5 +128,25 @@ impl ApiClient {
         self.tcp_client.send_event(packet).await?;
 
         Ok(())
+    }
+
+    /// Ping the management server and return round-trip time in milliseconds
+    pub async fn ping(&self) -> Result<u64, SdkError> {
+        let request_id = self.next_request_id();
+        let request = Packet::PingRequest { request_id };
+
+        let start = Instant::now();
+
+        self.tcp_client
+            .send_request_with_response(request, |packet| {
+                if let Packet::PingResponse { .. } = packet {
+                    Ok(())
+                } else {
+                    Err("Expected PingResponse packet".to_string())
+                }
+            })
+            .await?;
+
+        Ok(start.elapsed().as_millis() as u64)
     }
 }

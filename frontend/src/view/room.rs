@@ -10,11 +10,11 @@ use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
 use iced::widget::scrollable::{Direction, Rail, Scrollbar, Scroller};
 use iced::widget::{button, column, container, float, hover, mouse_area, row, rule, scrollable, slider, space, stack, text, Container, Id, Scrollable};
-use iced::{border, Alignment, Background, Border, Color, Element, Font, Length, Padding, Task, Theme};
+use iced::{border, font, Alignment, Background, Border, Color, Element, Font, Length, Padding, Task, Theme};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use arc_swap::ArcSwap;
-use iced::font::{Family, Weight};
+use iced::font::{Family, Stretch, Weight};
 use iced::mouse::Interaction;
 use iced::widget::slider::{Handle, HandleShape};
 use iced_aw::{ContextMenu, DropDown};
@@ -61,6 +61,8 @@ pub struct RoomPage {
     chat_history: BTreeMap<u64, ChatMessage>,
     volume_per_user: HashMap<u64, u8>,
     selected_user_settings: Option<u64>,
+    overlay_visible: bool,
+    ping_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +94,8 @@ impl RoomPage {
             chat_history: BTreeMap::new(),
             volume_per_user: config.audio.users_volumes.clone(),
             selected_user_settings: None,
+            overlay_visible: false,
+            ping_ms: None,
         }
     }
 
@@ -511,6 +515,41 @@ impl RoomPage {
             .map(|p| p.in_voice)
             .unwrap_or(false)
     }
+
+    fn overlay<'a>(&self) -> Container<'a, Message> {
+        let ping_text = match self.ping_ms {
+            Some(ms) => format!("{} ms", ms),
+            None => "---".to_string(),
+        };
+
+        const BOLD: Font = Font {
+            family: Family::Name("Rubik"),
+            weight: Weight::Semibold,
+            stretch: Stretch::Normal,
+            style: font::Style::Normal,
+        };
+
+        let overlay = container(
+            column!(
+                row!(
+                    text("Ping:").size(14).font(BOLD), text(ping_text).size(14).color(text_primary())
+                ).spacing(4),
+            )
+        )
+            .padding(Padding { top: 8.0, right: 12.0, bottom: 8.0, left: 12.0 })
+            .style(|_theme| Style {
+                background: Some(Background::Color(Color::from_rgba8(30, 30, 30, 0.5))),
+                border: border::rounded(8),
+                ..Style::default()
+            });
+
+        container(overlay)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Horizontal::Right)
+            .align_y(Vertical::Top)
+            .padding(16)
+    }
 }
 
 impl View for RoomPage {
@@ -587,8 +626,24 @@ impl View for RoomPage {
                         warn!("Failed to send message: {}", e);
                     }
                 }
+                VoiceCommandResult::Ping(result) => {
+                    match result {
+                        Ok(rtt_ms) => {
+                            self.ping_ms = Some(rtt_ms);
+                        }
+                        Err(e) => {
+                            warn!("Ping failed: {}", e);
+                            self.ping_ms = None;
+                        }
+                    }
+                }
                 _ => {}
             },
+            Message::KeyPressed(key) => {
+                if let iced::keyboard::Key::Named(iced::keyboard::key::Named::F10) = key {
+                    self.overlay_visible = !self.overlay_visible;
+                }
+            }
             Message::ServerEventReceived(event) => match event {
                 ClientEvent::ParticipantsList {
                     user_id,
@@ -655,6 +710,13 @@ impl View for RoomPage {
     }
 
     fn render(&self) -> Element<'_, Message> {
-        self.main_screen().into()
+        if self.overlay_visible {
+            stack![
+                self.main_screen(),
+                self.overlay()
+            ].into()
+        } else {
+            self.main_screen().into()
+        }
     }
 }

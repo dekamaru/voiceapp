@@ -29,6 +29,7 @@ packet_ids! {
     VoiceAuthRequest = 0x03,
     LeaveVoiceChannelRequest = 0x04,
     ChatMessageRequest = 0x05,
+    PingRequest = 0x06,
 
     // Responses (0x20-0x3F)
     LoginResponse = 0x21,
@@ -36,6 +37,7 @@ packet_ids! {
     JoinVoiceChannelResponse = 0x23,
     LeaveVoiceChannelResponse = 0x24,
     ChatMessageResponse = 0x25,
+    PingResponse = 0x26,
 
     // Events (0x40-0x5F)
     UserJoinedServer = 0x41,

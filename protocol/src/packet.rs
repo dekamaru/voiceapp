@@ -64,6 +64,9 @@ pub enum Packet {
         request_id: u64,
         message: String,
     },
+    PingRequest {
+        request_id: u64,
+    },
 
     // Responses
     LoginResponse {
@@ -87,6 +90,9 @@ pub enum Packet {
     ChatMessageResponse {
         request_id: u64,
         success: bool,
+    },
+    PingResponse {
+        request_id: u64,
     },
 
     // Events
@@ -163,6 +169,9 @@ impl Packet {
                 w.write_u64(*request_id);
                 w.write_string(message);
             }
+            Self::PingRequest { request_id } => {
+                w.write_u64(*request_id);
+            }
             Self::LoginResponse {
                 request_id,
                 id,
@@ -200,6 +209,9 @@ impl Packet {
             } => {
                 w.write_u64(*request_id);
                 w.write_bool(*success);
+            }
+            Self::PingResponse { request_id } => {
+                w.write_u64(*request_id);
             }
             Self::UserJoinedServer { participant } => participant.write(&mut w),
             Self::UserJoinedVoice { user_id }
@@ -282,6 +294,9 @@ impl Packet {
                 request_id: r.read_u64()?,
                 message: r.read_string()?,
             },
+            PacketId::PingRequest => Self::PingRequest {
+                request_id: r.read_u64()?,
+            },
             PacketId::LoginResponse => {
                 let request_id = r.read_u64()?;
                 let id = r.read_u64()?;
@@ -313,6 +328,9 @@ impl Packet {
             PacketId::ChatMessageResponse => Self::ChatMessageResponse {
                 request_id: r.read_u64()?,
                 success: r.read_bool()?,
+            },
+            PacketId::PingResponse => Self::PingResponse {
+                request_id: r.read_u64()?,
             },
             PacketId::UserJoinedServer => Self::UserJoinedServer {
                 participant: ParticipantInfo::read(&mut r)?,
@@ -355,11 +373,13 @@ impl Packet {
             Self::JoinVoiceChannelRequest { .. } => PacketId::JoinVoiceChannelRequest,
             Self::LeaveVoiceChannelRequest { .. } => PacketId::LeaveVoiceChannelRequest,
             Self::ChatMessageRequest { .. } => PacketId::ChatMessageRequest,
+            Self::PingRequest { .. } => PacketId::PingRequest,
             Self::LoginResponse { .. } => PacketId::LoginResponse,
             Self::VoiceAuthResponse { .. } => PacketId::VoiceAuthResponse,
             Self::JoinVoiceChannelResponse { .. } => PacketId::JoinVoiceChannelResponse,
             Self::LeaveVoiceChannelResponse { .. } => PacketId::LeaveVoiceChannelResponse,
             Self::ChatMessageResponse { .. } => PacketId::ChatMessageResponse,
+            Self::PingResponse { .. } => PacketId::PingResponse,
             Self::UserJoinedServer { .. } => PacketId::UserJoinedServer,
             Self::UserJoinedVoice { .. } => PacketId::UserJoinedVoice,
             Self::UserLeftVoice { .. } => PacketId::UserLeftVoice,
@@ -382,11 +402,13 @@ impl Packet {
             | Self::JoinVoiceChannelRequest { request_id }
             | Self::LeaveVoiceChannelRequest { request_id }
             | Self::ChatMessageRequest { request_id, .. }
+            | Self::PingRequest { request_id }
             | Self::LoginResponse { request_id, .. }
             | Self::VoiceAuthResponse { request_id, .. }
             | Self::JoinVoiceChannelResponse { request_id, .. }
             | Self::LeaveVoiceChannelResponse { request_id, .. }
-            | Self::ChatMessageResponse { request_id, .. } => Some(*request_id),
+            | Self::ChatMessageResponse { request_id, .. }
+            | Self::PingResponse { request_id } => Some(*request_id),
             _ => None,
         }
     }

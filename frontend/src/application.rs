@@ -123,7 +123,8 @@ impl Application {
                 }
             }),
             iced::time::every(Duration::from_secs(10)).map(|_| Message::PeriodicConfigSave),
-            iced::window::close_requests().map(Message::WindowCloseRequested),
+            iced::time::every(Duration::from_secs(5)).map(|_| Message::ExecuteVoiceCommand(VoiceCommand::Ping)),
+            iced::window::close_requests().map(Message::WindowCloseRequested)
         ])
     }
 

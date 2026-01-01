@@ -115,4 +115,9 @@ impl Client {
     pub async fn send_mute_state(&self, is_muted: bool) -> Result<(), SdkError> {
         self.api_client.send_mute_state(self.user_id.load(Ordering::Relaxed), is_muted).await
     }
+
+    /// Ping the management server and return round-trip time in milliseconds
+    pub async fn ping(&self) -> Result<u64, SdkError> {
+        self.api_client.ping().await
+    }
 }

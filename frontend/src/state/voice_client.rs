@@ -14,6 +14,7 @@ pub enum VoiceCommand {
     JoinVoiceChannel,
     LeaveVoiceChannel,
     SendChatMessage(String),
+    Ping,
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +23,7 @@ pub enum VoiceCommandResult {
     JoinVoiceChannel(Result<(), String>),
     LeaveVoiceChannel(Result<(), String>),
     SendChatMessage(Result<(), String>),
+    Ping(Result<u64, String>),  // RTT in milliseconds
 }
 
 pub struct VoiceClientState {
@@ -81,6 +83,14 @@ impl VoiceClientState {
                     ))
                 },
             ),
+            VoiceCommand::Ping => Task::perform(
+                async move { client.ping().await },
+                |result| {
+                    Message::VoiceCommandResult(VoiceCommandResult::Ping(
+                        result.map_err(|e| e.to_string()),
+                    ))
+                },
+            ),
         }
     }
 }
@@ -89,7 +99,7 @@ impl State for VoiceClientState {
     fn init(&mut self) -> Task<Message> {
         Task::run(self.voice_client.event_stream(), |e| Message::ServerEventReceived(e))
     }
-    
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ExecuteVoiceCommand(command) => self.handle_voice_command(command),
