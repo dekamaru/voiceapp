@@ -70,7 +70,7 @@ cargo build --release -p voiceapp-desktop
 
 ## Architecture
 
-Centralized server model. Easier to implement and avoids P2P issues like NAT traversal and bandwidth scaling (with P2P, each client sends to every other client).
+Centralized server model. Easier to implement and avoids P2P issues like NAT traversal and bandwidth scaling.
 
 - **Desktop Client**: GUI (iced), mic capture (cpal), Opus encoding, UDP for voice, TCP for presence
 - **Server**: TCP for login/presence/channels, UDP relay for voice packets
