@@ -23,6 +23,7 @@ VoiceApp is a set of binaries that let you run your own voice chat:
 
 - **[desktop](desktop)** - Reference desktop client built with the SDK
 - **[server](server/README.md)** - Central server acting as both management and voice relay server
+- **[protocol](protocol/README.md)** - Binary protocol for client-server communication
 - **[sdk](sdk/README.md)** - SDK for building custom clients or integrations (includes encoding, resampling, networking)
 - **[extras](extras/README.md)** - Additional tools
 
