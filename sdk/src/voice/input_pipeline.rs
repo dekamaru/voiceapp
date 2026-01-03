@@ -9,6 +9,8 @@ use crate::voice::resampler::AudioResampler;
 /// Voice input pipeline: resamples, buffers, and encodes audio to Opus
 pub(crate) struct InputPipeline;
 
+const RESAMPLER_CHUNK_SIZE: usize = 480;
+
 impl InputPipeline {
     /// Create a new VoiceInputPipeline with external channels
     pub fn new(
@@ -22,7 +24,7 @@ impl InputPipeline {
             Some(AudioResampler::new(
                 target_sample_rate,
                 OPUS_SAMPLE_RATE,
-                OPUS_FRAME_SIZE
+                RESAMPLER_CHUNK_SIZE as u32,
             )?)
         } else {
             None
@@ -41,8 +43,6 @@ impl InputPipeline {
         resample_buffer: &mut Vec<f32>,
         encode_buffer: &mut Vec<f32>,
     ) {
-        const RESAMPLER_CHUNK_SIZE: usize = 480;
-
         match resampler {
             Some(resampler) => {
                 resample_buffer.extend_from_slice(frame);
