@@ -1,8 +1,5 @@
 use async_channel::{unbounded, Receiver, Sender};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 use voiceapp_protocol::{Packet, ParticipantInfo};
 
 /// Events from the voice server

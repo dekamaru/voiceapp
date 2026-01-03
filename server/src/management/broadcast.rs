@@ -10,7 +10,7 @@ pub struct BroadcastMessage {
 
 impl BroadcastMessage {
     /// Create a broadcast message that will be sent to all clients.
-    pub fn to_all(packet: &Packet) -> Self {
+    pub fn for_all(packet: &Packet) -> Self {
         Self {
             exclude: None,
             data: packet.encode(),

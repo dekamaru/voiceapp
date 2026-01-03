@@ -79,15 +79,11 @@ pub fn calculate_dbfs(samples: &[f32]) -> f32 {
         -100.0
     };
 
-    const NOISE_GATE_DB: f32 = -70.0;
+    const MIN_DB: f32 = -100.0;
     const MAX_DB: f32 = 0.0;
 
-    if db_fs < NOISE_GATE_DB {
-        0.0
-    } else {
-        // Map from NOISE_GATE_DB to 0 dBFS as 0.0 to 1.0
-        ((db_fs - NOISE_GATE_DB) / (MAX_DB - NOISE_GATE_DB)).clamp(0.0, 1.0)
-    }
+    // Map from -100 dBFS to 0 dBFS as 0.0 to 1.0
+    ((db_fs - MIN_DB) / (MAX_DB - MIN_DB)).clamp(0.0, 1.0)
 }
 
 pub fn adjust_volume(buffer: &mut [f32], volume: f32) {

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, Device, DeviceId, SampleFormat, SampleRate, Stream, StreamConfig};
+use cpal::{BufferSize, Device, SampleFormat, SampleRate, Stream, StreamConfig};
 use std::sync::Arc;
 use tracing::{error, warn};
 use crate::audio::audio_source::AudioSource;

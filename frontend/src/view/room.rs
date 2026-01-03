@@ -9,7 +9,7 @@ use iced::widget::button::Status;
 use iced::widget::container::Style;
 use iced::widget::rule::FillMode;
 use iced::widget::scrollable::{Direction, Rail, Scrollbar, Scroller};
-use iced::widget::{button, column, container, float, hover, mouse_area, row, rule, scrollable, slider, space, stack, text, Container, Id, Scrollable};
+use iced::widget::{button, column, container, mouse_area, row, rule, scrollable, slider, space, stack, text, Container, Id, Scrollable};
 use iced::{border, font, Alignment, Background, Border, Color, Element, Font, Length, Padding, Task, Theme};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -17,12 +17,10 @@ use arc_swap::ArcSwap;
 use iced::font::{Family, Stretch, Weight};
 use iced::mouse::Interaction;
 use iced::widget::slider::{Handle, HandleShape};
-use iced_aw::{ContextMenu, DropDown};
+use iced_aw::{DropDown};
 use tracing::{debug, warn};
-use tracing::log::info;
 use voiceapp_sdk::{ParticipantInfo, ClientEvent};
 use crate::config::AppConfig;
-use crate::view::settings::SettingsPageMessage;
 use crate::state::voice_client::{VoiceCommand, VoiceCommandResult};
 use crate::view::view::View;
 
@@ -103,7 +101,7 @@ impl RoomPage {
         }
     }
 
-    fn main_screen<'a>(&self) -> iced::widget::Container<Message> {
+    fn main_screen<'a>(&self) -> iced::widget::Container<'_, Message> {
         let rule_style = |_theme: &Theme| rule::Style {
             color: divider_bg(),
             radius: Radius::default(),
@@ -449,7 +447,7 @@ impl RoomPage {
                 &100
             };
 
-            let user_volume_slider = slider(0..=100, *user_volume_value, |v| {
+            let user_volume_slider = slider(0..=200, *user_volume_value, |v| {
                 RoomPageMessage::UserVolumeChanged(participant.user_id, v).into()
             })
                 .style(|_theme: &Theme, _status: slider::Status| slider::Style {
@@ -489,18 +487,23 @@ impl RoomPage {
                 .width(214)
                 .padding(Padding { left: 16.0, right: 16.0, ..Padding::default() });
 
-            let expand_dropdown = if let Some(user_id) = self.selected_user_settings {
-                user_id == participant.user_id
+            // Skip dropdown for current user
+            if participant.user_id == self.user_id {
+                members_column = members_column.push(member_container);
             } else {
-                false
-            };
+                let expand_dropdown = if let Some(user_id) = self.selected_user_settings {
+                    user_id == participant.user_id
+                } else {
+                    false
+                };
 
-            let dropdown = DropDown::new(member_container, member_settings, expand_dropdown)
-                .on_dismiss(RoomPageMessage::UserSettingsDismissed.into())
-                .width(Length::Fill)
-                .offset(-5.0);
+                let dropdown = DropDown::new(member_container, member_settings, expand_dropdown)
+                    .on_dismiss(RoomPageMessage::UserSettingsDismissed.into())
+                    .width(Length::Fill)
+                    .offset(-5.0);
 
-            members_column = members_column.push(dropdown);
+                members_column = members_column.push(dropdown);
+            }
         }
 
         elements.push(

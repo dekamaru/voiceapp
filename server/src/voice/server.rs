@@ -11,7 +11,6 @@ use crate::voice::session::VoiceSession;
 
 /// VoiceRelayServer handles UDP voice packet relaying.
 /// It depends on ManagementServer for user authentication and state.
-#[derive(Debug)]
 pub struct VoiceRelayServer {
     events_channel: UnboundedReceiver<Event>,
     sessions: DashMap<u64, VoiceSession>,

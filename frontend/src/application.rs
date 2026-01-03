@@ -4,7 +4,7 @@ use crate::audio::{AudioManager};
 use crate::view::login::{LoginPage, LoginPageMessage};
 use crate::view::room::{RoomPage, RoomPageMessage};
 use crate::view::settings::{SettingsPage, SettingsPageMessage};
-use iced::{Task, Subscription, Element};
+use iced::{Task, Subscription};
 use std::sync::{Arc};
 use arc_swap::ArcSwap;
 use tracing::info;

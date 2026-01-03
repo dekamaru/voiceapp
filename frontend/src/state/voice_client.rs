@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use iced::Task;
+use tracing::error;
 use voiceapp_sdk::Client;
 use crate::application::Message;
 use crate::state::State;
@@ -111,8 +112,13 @@ impl State for VoiceClientState {
             Message::ExecuteVoiceCommand(command) => self.handle_voice_command(command),
             Message::MuteInput(muted) => {
                 let voice_client = self.voice_client.clone();
-                // TODO: error handling
-                Task::future(async move { voice_client.send_mute_state(muted).await; Message::None })
+                Task::future(async move {
+                    if let Err(e) = voice_client.send_mute_state(muted).await {
+                        error!("Failed to send mute state: {}", e);
+                    }
+
+                    Message::None
+                })
             }
             _ => Task::none()
         }

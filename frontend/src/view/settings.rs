@@ -550,7 +550,7 @@ impl View for SettingsPage {
     }
 }
 
-/// Convert sensitivity value (0-100) to dB range (-70 to 0)
+/// Convert sensitivity value (0-100) to dB range (-100 to 0)
 fn sensitivity_to_db(sensitivity: u8) -> f32 {
-    -70.0 + (sensitivity as f32 / 100.0) * 70.0
+    -100.0 + sensitivity as f32
 }

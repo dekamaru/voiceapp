@@ -306,7 +306,7 @@ impl UserHandler {
             timestamp,
             message: message.clone(),
         };
-        let _ = self.broadcast_channel.send(BroadcastMessage::to_all(&message_event));
+        let _ = self.broadcast_channel.send(BroadcastMessage::for_all(&message_event));
 
         debug!(
             "[{}] User sent message: id={}, len={}",
@@ -362,12 +362,12 @@ impl UserHandler {
         if let Some(user) = user_option {
             // Broadcast user left server event to all clients
             let left_event = Packet::UserLeftServer { user_id: user.id };
-            let _ = self.broadcast_channel.send(BroadcastMessage::to_all(&left_event));
+            let _ = self.broadcast_channel.send(BroadcastMessage::for_all(&left_event));
 
             // If user was in voice channel, broadcast user left voice event
             if user.in_voice {
                 let left_voice_event = Packet::UserLeftVoice { user_id: user.id };
-                let _ = self.broadcast_channel.send(BroadcastMessage::to_all(&left_voice_event));
+                let _ = self.broadcast_channel.send(BroadcastMessage::for_all(&left_voice_event));
             }
 
             debug!(

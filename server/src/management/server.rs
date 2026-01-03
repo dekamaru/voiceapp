@@ -14,7 +14,6 @@ use crate::management::handler::UserHandler;
 
 /// ManagementServer handles TCP connections, user login, presence management,
 /// and broadcasts events to all connected clients.
-#[derive(Debug)]
 pub struct ManagementServer {
     users: Arc<DashMap<SocketAddr, User>>,
     next_user_id: Arc<AtomicU64>,

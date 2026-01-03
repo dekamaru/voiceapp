@@ -90,29 +90,3 @@ match packet {
     _ => {}
 }
 ```
-
-## Packet Types
-
-### Requests
-- `LoginRequest` - Initial authentication
-- `VoiceAuthRequest` - UDP voice channel auth
-- `JoinVoiceChannelRequest` - Join voice channel
-- `LeaveVoiceChannelRequest` - Leave voice channel
-- `ChatMessageRequest` - Send chat message
-
-### Responses
-- `LoginResponse` - Auth result with participant list
-- `VoiceAuthResponse` - UDP auth result
-- `JoinVoiceChannelResponse` - Join result
-- `LeaveVoiceChannelResponse` - Leave result
-- `ChatMessageResponse` - Message send result
-
-### Events
-- `UserJoinedServer` - User connected
-- `UserJoinedVoice` - User joined voice channel
-- `UserLeftVoice` - User left voice channel
-- `UserLeftServer` - User disconnected
-- `UserSentMessage` - Chat message received
-
-### UDP Voice
-- `VoiceData` - Audio frame (Opus encoded data)
