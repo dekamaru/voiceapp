@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"] // Hide terminal window on Windows.
+
 use iced::theme::Palette;
 use iced::Theme::Dark;
 use iced::{Font, Theme};
@@ -49,7 +51,7 @@ fn main() -> iced::Result {
 fn configure_logging() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::new("voiceapp_frontend=debug,voiceapp_sdk=debug")
+            EnvFilter::new("voiceapp_frontend=info,voiceapp_sdk=info")
         )
         .init();
 
