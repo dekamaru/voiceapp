@@ -29,8 +29,10 @@ VoiceApp is a set of binaries that let you run your own voice chat:
 ## Features
 
 - 🎙️ Real-time voice communication with unlimited peers
+- 👥 Group chat messaging
 - 🎧 Wide audio device support with auto-resampling
 - ⚡ Lightweight custom binary protocol
+
 
 ## Motivation
 
