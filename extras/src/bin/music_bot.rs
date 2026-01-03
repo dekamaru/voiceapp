@@ -1,7 +1,40 @@
+//! Music Bot - A command-line tool for streaming WAV audio files to a voice channel.
+//!
+//! This bot connects to the voice server and streams audio from a WAV file,
+//! making it useful for playing music or sound effects in voice channels.
+//!
+//! # Requirements
+//!
+//! The WAV file must be in the following format:
+//! - Sample rate: 48000 Hz
+//! - Channels: Mono (1 channel)
+//! - Bit depth: 16-bit
+//!
+//! # Usage
+//!
+//! ```bash
+//! music_bot [OPTIONS] <wav_file>
+//! ```
+//!
+//! # Examples
+//!
+//! ```bash
+//! # Use default servers
+//! music_bot music.wav
+//!
+//! # Specify custom servers
+//! music_bot --server 192.168.1.100:9001 --voice-server 192.168.1.100:9002 music.wav
+//! ```
+//!
+//! # Options
+//!
+//! - `--server <addr>` - Management server address (default: `127.0.0.1:9001`)
+//! - `--voice-server <addr>` - Voice relay server address (default: `127.0.0.1:9002`)
+
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{error, info};
-use voiceapp_sdk::{Client};
+use voiceapp_sdk::{Client, ClientEvent};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,15 +45,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args: Vec<String> = std::env::args().collect();
 
-    if args.len() < 2 {
-        eprintln!("Usage: music_bot <wav_file>");
-        eprintln!("Example: music_bot music.wav");
-        std::process::exit(1);
+    let mut server_addr = "127.0.0.1:9001".to_string();
+    let mut voice_server_addr = "127.0.0.1:9002".to_string();
+    let mut wav_file = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--server" => {
+                i += 1;
+                if i < args.len() {
+                    server_addr = args[i].clone();
+                } else {
+                    eprintln!("Error: --server requires an address");
+                    std::process::exit(1);
+                }
+            }
+            "--voice-server" => {
+                i += 1;
+                if i < args.len() {
+                    voice_server_addr = args[i].clone();
+                } else {
+                    eprintln!("Error: --voice-server requires an address");
+                    std::process::exit(1);
+                }
+            }
+            arg if !arg.starts_with("--") => {
+                wav_file = Some(arg.to_string());
+            }
+            arg => {
+                eprintln!("Error: Unknown option '{}'", arg);
+                std::process::exit(1);
+            }
+        }
+        i += 1;
     }
 
-    let server_addr = "127.0.0.1:9001";
-    let voice_server_addr = "127.0.0.1:9002";
-    let wav_file = &args[1];
+    let wav_file = match wav_file {
+        Some(f) => f,
+        None => {
+            eprintln!("Usage: music_bot [OPTIONS] <wav_file>");
+            eprintln!();
+            eprintln!("Options:");
+            eprintln!("  --server <addr>        Management server address (default: 127.0.0.1:9001)");
+            eprintln!("  --voice-server <addr>  Voice relay server address (default: 127.0.0.1:9002)");
+            eprintln!();
+            eprintln!("Example: music_bot --server 192.168.1.100:9001 music.wav");
+            std::process::exit(1);
+        }
+    };
 
     info!("Music bot starting...");
     info!("Management server: {}", server_addr);
