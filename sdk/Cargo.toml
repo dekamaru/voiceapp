@@ -2,14 +2,25 @@
 name = "voiceapp-sdk"
 version = "0.0.1"
 edition = "2021"
+description = "Voice communication client SDK with Opus encoding and jitter buffer"
+license = "MIT"
+keywords = ["voice", "opus", "sdk", "real-time", "audio"]
+categories = ["multimedia::audio", "network-programming"]
+
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
 
 [dependencies]
 voiceapp-protocol = { path = "../protocol" }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt", "net", "sync", "macros"] }
 tracing = "0.1"
 opus = "0.3"
-neteq = "0.8.0"
-async-channel = "2.5.0"
-rubato = "0.16.2"
+neteq = "0.8"
+async-channel = "2.5"
+rubato = "0.16"
 dashmap = "6.1"
-thiserror = "2.0.17"
+thiserror = "2"
