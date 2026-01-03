@@ -1,7 +1,5 @@
 # VoiceApp
 
-<!-- [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) -->
-
 A VoIP application written in Rust. Think Discord or TeamSpeak, but self-hosted and open-source.
 
 > **Status**: Early Development
